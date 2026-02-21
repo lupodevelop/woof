@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/img/woof-logo.png" alt="woof logo" width="200" />
+  <img src="https://raw.githubusercontent.com/lupodevelop/woof/main/assets/img/woof-logo.png" alt="woof logo" width="200" />
 </p>
 
 [![Package Version](https://img.shields.io/hexpm/v/woof)](https://hex.pm/packages/woof) [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/woof/) [![Built with Gleam](https://img.shields.io/badge/built%20with-gleam-ffaff3?logo=gleam)](https://gleam.run) [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
