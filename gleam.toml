@@ -4,9 +4,11 @@ version = "1.0.0"
 # Fill out these fields if you intend to generate HTML documentation or publish
 # your project to the Hex package manager.
 #
-# description = ""
-# licences = ["MIT"]
-# repository = { type = "github", user = "lupodevelop", repo = "woof" }
+
+description = "A straightforward logging library for Gleam."
+licences = ["MIT"]
+repository = { type = "github", user = "lupodevelop", repo = "woof" }
+
 # links = []
 #
 # For a full reference of all the available options, you can have a look at
