@@ -315,8 +315,6 @@ Emits: `db_query completed` with a `duration_ms` field.
 
 ## Cross-platform
 
----
-
 woof works on both the Erlang and JavaScript targets.
 
 - **Erlang**: global state uses `persistent_term` (part of `erts`, always
@@ -327,8 +325,6 @@ woof works on both the Erlang and JavaScript targets.
 Output format is identical on both targets.
 
 ## Dependencies & Requirements
-
----
 
 
 * Gleam **1.14** or newer (tested with 1.14.0).  
