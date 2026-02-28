@@ -432,7 +432,7 @@ pub fn time(label: String, body: fn() -> a) -> a {
   let result = body()
   let elapsed = ffi_monotonic_now() - start
   info(label <> " completed", [
-    #("duration_ms", float.to_string(int.to_float(elapsed))),
+    #("duration_ms", int.to_string(elapsed)),
   ])
   result
 }
@@ -704,6 +704,8 @@ fn json_escape(s: String) -> String {
   |> string.replace("\n", "\\n")
   |> string.replace("\r", "\\r")
   |> string.replace("\t", "\\t")
+  |> string.replace("\u{0008}", "\\b")
+  |> string.replace("\u{000C}", "\\f")
 }
 
 fn level_tag(level: Level) -> String {

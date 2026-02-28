@@ -3,6 +3,16 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-02-28
+### Fixed
+- Fixed changelog link pointing to `0.1.0` instead of `1.0.0`.
+- Simplified `time()` duration formatting: removed unnecessary
+  `Int → Float → String` conversion, now uses `int.to_string` directly.
+- Added missing `\b` (backspace) and `\f` (form feed) escapes in
+  `json_escape`, as required by RFC 8259.
+- Removed redundant `---` horizontal rules in the README under
+  "Cross-platform" and "Dependencies & Requirements" headings.
+
 ## [1.0.0] - 2026-02-21
 ### Added
 - Initial public release of the `woof` logging library for Gleam. Dedicated to Echo the dog.
@@ -22,4 +32,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Comprehensive test suite (34 tests) and detailed documentation in README and
   project reference.
 
-[0.1.0]: https://hex.pm/packages/woof/0.1.0
+[1.0.1]: https://hex.pm/packages/woof/1.0.1
+[1.0.0]: https://hex.pm/packages/woof/1.0.0
