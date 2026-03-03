@@ -155,7 +155,7 @@ pub fn json_escapes_special_chars_test() {
     woof.Entry(
       level: woof.Info,
       message: "Line1\nLine2",
-      fields: [#("data", "has \"quotes\"")],
+      fields: [#("data", "has \"quotes\"\u{001b}[31mred\u{001b}[0m")],
       namespace: None,
       timestamp: "2026-02-11T10:30:45.123Z",
     )
@@ -163,8 +163,32 @@ pub fn json_escapes_special_chars_test() {
   let output = woof.format(entry, woof.Json)
   // Message newline should be escaped
   output |> string.contains("Line1\\nLine2") |> should.be_true
-  // Quotes in field values should be escaped
-  output |> string.contains("has \\\"quotes\\\"") |> should.be_true
+  // Quotes and ANSI escapes in field values should be escaped
+  output
+  |> string.contains("has \\\"quotes\\\"\\u001b[31mred\\u001b[0m")
+  |> should.be_true
+}
+
+pub fn json_reserved_keys_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "Msg",
+      fields: [
+        #("level", "custom"),
+        #("msg", "override"),
+        #("time", "now"),
+        #("ns", "some"),
+      ],
+      namespace: None,
+      timestamp: "2026-02-11T10:30:45.123Z",
+    )
+
+  let output = woof.format(entry, woof.Json)
+  output |> string.contains("\"_level\":\"custom\"") |> should.be_true
+  output |> string.contains("\"_msg\":\"override\"") |> should.be_true
+  output |> string.contains("\"_time\":\"now\"") |> should.be_true
+  output |> string.contains("\"_ns\":\"some\"") |> should.be_true
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +446,22 @@ pub fn compact_with_fields_test() {
   woof.format(entry, woof.Compact)
   |> should.equal(
     "WARN 2026-02-11T10:30:45.123Z High memory usage_mb=1024 threshold=800",
+  )
+}
+
+pub fn compact_with_spaces_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "User logged in",
+      fields: [#("name", "John Doe"), #("empty", ""), #("equation", "1+1=2")],
+      namespace: None,
+      timestamp: "2026-02-11T10:30:45.123Z",
+    )
+
+  woof.format(entry, woof.Compact)
+  |> should.equal(
+    "INFO 2026-02-11T10:30:45.123Z User logged in name=\"John Doe\" empty=\"\" equation=\"1+1=2\"",
   )
 }
 

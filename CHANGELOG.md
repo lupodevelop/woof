@@ -3,6 +3,15 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-03-03
+### Fixed
+- Changed `Compact` format to wrap values in quotes when they contain spaces, `=` or are empty, conforming more closely to logfmt parsers.
+- Protected internal JSON keys (`level`, `time`, `ns`, `msg`) by prefixing user fields with `_` if they collide.
+- Enhanced `json_escape` to properly escape ANSI sequence control characters (`\u001b` / `\x1b`) so they don't break JSON log pipelines.
+
+### Documentation
+- Added a "Notice for JavaScript async users" in the README and docs for `with_context`, detailing how cooperatively scheduled Promise-based code in JS affects the global context.
+
 ## [1.0.1] - 2026-02-28
 ### Fixed
 - Fixed changelog link pointing to `0.1.0` instead of `1.0.0`.
@@ -32,5 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Comprehensive test suite (34 tests) and detailed documentation in README and
   project reference.
 
+[1.0.2]: https://hex.pm/packages/woof/1.0.2
 [1.0.1]: https://hex.pm/packages/woof/1.0.1
 [1.0.0]: https://hex.pm/packages/woof/1.0.0
