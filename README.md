@@ -188,6 +188,9 @@ woof.info("Processing", [])
 // fields: service=api, request_id=<id>
 ```
 
+> **Notice for JavaScript async users**  
+> On the BEAM, `with_context` uses the process dictionary, so concurrent requests never interfere. On the JavaScript target, because JS is fundamentally single-threaded with cooperative concurrency, `with_context` modifies a global state. If your `with_context` callback returns a `Promise` (or does asynchronous `await`s), the context might leak or be overwritten by other concurrent async operations. If you heavily rely on async/await in Node/Deno for concurrent requests, consider passing context explicitly instead of using `with_context`.
+
 ### Global context
 
 Set fields that appear on every message, everywhere:

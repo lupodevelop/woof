@@ -315,6 +315,12 @@ pub fn bool_field(key: String, value: Bool) -> #(String, String) {
 /// On the BEAM each process gets its own context (process dictionary), so
 /// concurrent request handlers never interfere with each other.
 ///
+/// **Notice for JavaScript async users**: On the JavaScript target, because
+/// JS uses cooperative concurrency and is single-threaded, `with_context` 
+/// modifies a global state. If your callback enters an async sleep/promise,
+/// the context might be overwritten by other concurrent tasks. Use with 
+/// caution in highly concurrent async Node/Deno servers.
+///
 /// ```gleam
 /// use <- woof.with_context([#("request_id", req.id)])
 /// woof.info("Processing", [])   // includes request_id automatically
@@ -659,7 +665,15 @@ fn format_compact(entry: Entry) -> String {
       let pairs =
         list.map(fields, fn(f) {
           let #(k, v) = f
-          k <> "=" <> v
+          let needs_quotes =
+            string.contains(v, " ")
+            || string.contains(v, "=")
+            || string.is_empty(v)
+          let val = case needs_quotes {
+            True -> "\"" <> string.replace(v, "\"", "\\\"") <> "\""
+            False -> v
+          }
+          k <> "=" <> val
         })
         |> string.join(" ")
       base <> " " <> pairs
@@ -686,7 +700,11 @@ fn format_json(entry: Entry) -> String {
       with_msg,
       list.map(entry.fields, fn(f) {
         let #(k, v) = f
-        json_pair(k, v)
+        let safe_k = case k {
+          "level" | "time" | "ns" | "msg" -> "_" <> k
+          _ -> k
+        }
+        json_pair(safe_k, v)
       }),
     )
 
@@ -702,6 +720,7 @@ fn json_escape(s: String) -> String {
   |> string.replace("\\", "\\\\")
   |> string.replace("\"", "\\\"")
   |> string.replace("\n", "\\n")
+  |> string.replace("\u{001B}", "\\u001b")
   |> string.replace("\r", "\\r")
   |> string.replace("\t", "\\t")
   |> string.replace("\u{0008}", "\\b")
