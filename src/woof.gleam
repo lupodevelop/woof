@@ -39,6 +39,11 @@ pub type Format {
   Custom(formatter: fn(Entry) -> String)
 }
 
+/// A Sink is responsible for side-effects (e.g. printing or sending the log).
+/// It receives the raw Entry and the final formatted String.
+pub type Sink =
+  fn(Entry, String) -> Nil
+
 /// Controls whether ANSI colors are used in `Text` output.
 pub type ColorMode {
   /// Auto-detect: colors are enabled when stdout is a TTY and the
@@ -114,6 +119,21 @@ pub fn set_level(level: Level) -> Nil {
 pub fn set_format(format: Format) -> Nil {
   let state = read_state()
   write_state(State(..state, format: format))
+}
+
+/// Set the sink function used to emit formatted logs.
+///
+/// The default sink uses `io.println` to write to standard output.
+pub fn set_sink(sink: Sink) -> Nil {
+  let state = read_state()
+  write_state(State(..state, sink: sink))
+}
+
+/// The default sink that prints formatted logs to standard output.
+/// Useful if you are building a custom sink but still want to print
+/// to the console.
+pub fn default_sink(_entry: Entry, formatted: String) -> Nil {
+  io.println(formatted)
 }
 
 // ---------------------------------------------------------------------------
@@ -363,11 +383,18 @@ type State {
     format: Format,
     colors: ColorMode,
     global_context: List(#(String, String)),
+    sink: Sink,
   )
 }
 
 fn default_state() -> State {
-  State(level: Debug, format: Text, colors: Auto, global_context: [])
+  State(
+    level: Debug,
+    format: Text,
+    colors: Auto,
+    global_context: [],
+    sink: default_sink,
+  )
 }
 
 fn read_state() -> State {
@@ -425,8 +452,8 @@ fn do_emit(
       namespace: namespace,
       timestamp: ffi_now(),
     )
-  format_entry(entry, state.format, state.colors)
-  |> io.println
+  let formatted = format_entry(entry, state.format, state.colors)
+  state.sink(entry, formatted)
 }
 
 fn should_log(msg_level: Level, min_level: Level) -> Bool {
