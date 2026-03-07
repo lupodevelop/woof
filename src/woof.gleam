@@ -50,15 +50,8 @@ pub type ColorMode {
   Never
 }
 
-/// Top-level configuration.
-///
-/// ```gleam
-/// woof.configure(woof.Config(
-///   level: woof.Info,
-///   format: woof.Json,
-///   colors: woof.Auto,
-/// ))
-/// ```
+/// Basic config: level, format, and colors.
+/// Pass a `Config` to `woof.configure` to change settings.
 pub type Config {
   Config(level: Level, format: Format, colors: ColorMode)
 }
@@ -77,14 +70,7 @@ pub type Entry {
   )
 }
 
-/// An opaque logger handle carrying a namespace.
-///
-/// Create one with `new` and pass it to `log`:
-///
-/// ```gleam
-/// let db = woof.new("database")
-/// db |> woof.log(woof.Info, "Connected", [])
-/// ```
+/// A tiny object holding a namespace for namespaced logs.
 pub opaque type Logger {
   Logger(namespace: String)
 }
@@ -97,14 +83,6 @@ pub opaque type Logger {
 ///
 /// This sets level, format, and color mode at once.  Global context is
 /// left untouched — use `set_global_context` if you need to change it.
-///
-/// ```gleam
-/// woof.configure(woof.Config(
-///   level: woof.Info,
-///   format: woof.Json,
-///   colors: woof.Auto,
-/// ))
-/// ```
 pub fn configure(config: Config) -> Nil {
   let state = read_state()
   write_state(
@@ -117,13 +95,8 @@ pub fn configure(config: Config) -> Nil {
   )
 }
 
-/// Set the color mode.
-///
-/// Colors only affect `Text` output — `Json` and `Compact` are never colored.
-///
-/// ```gleam
-/// woof.set_colors(woof.Never)
-/// ```
+/// Change whether text logs use ANSI colors.
+/// (Json/Compact formats ignore this setting.)
 pub fn set_colors(mode: ColorMode) -> Nil {
   let state = read_state()
   write_state(State(..state, colors: mode))
@@ -132,20 +105,12 @@ pub fn set_colors(mode: ColorMode) -> Nil {
 /// Set the minimum log level.
 ///
 /// Messages below this level are silently dropped with near-zero overhead.
-///
-/// ```gleam
-/// woof.set_level(woof.Warning)
-/// ```
 pub fn set_level(level: Level) -> Nil {
   let state = read_state()
   write_state(State(..state, level: level))
 }
 
 /// Set the output format.
-///
-/// ```gleam
-/// woof.set_format(woof.Json)
-/// ```
 pub fn set_format(format: Format) -> Nil {
   let state = read_state()
   write_state(State(..state, format: format))
@@ -156,37 +121,21 @@ pub fn set_format(format: Format) -> Nil {
 // ---------------------------------------------------------------------------
 
 /// Log at Debug level.
-///
-/// ```gleam
-/// woof.debug("Cache hit", [#("key", cache_key)])
-/// ```
 pub fn debug(message: String, fields: List(#(String, String))) -> Nil {
   emit(Debug, message, fields, None)
 }
 
 /// Log at Info level.
-///
-/// ```gleam
-/// woof.info("User signed in", [#("user_id", id)])
-/// ```
 pub fn info(message: String, fields: List(#(String, String))) -> Nil {
   emit(Info, message, fields, None)
 }
 
 /// Log at Warning level.
-///
-/// ```gleam
-/// woof.warning("Rate limit at 90 %", [#("limit", "100/min")])
-/// ```
 pub fn warning(message: String, fields: List(#(String, String))) -> Nil {
   emit(Warning, message, fields, None)
 }
 
 /// Log at Error level.
-///
-/// ```gleam
-/// woof.error("Connection lost", [#("host", "db01")])
-/// ```
 pub fn error(message: String, fields: List(#(String, String))) -> Nil {
   emit(Error, message, fields, None)
 }
@@ -198,10 +147,6 @@ pub fn error(message: String, fields: List(#(String, String))) -> Nil {
 /// Log at Debug level, evaluating the message only if Debug is enabled.
 ///
 /// Use this when building the message string is expensive.
-///
-/// ```gleam
-/// woof.debug_lazy(fn() { expensive_debug_dump() }, [])
-/// ```
 pub fn debug_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
   emit_lazy(Debug, build, fields, None)
 }
@@ -232,21 +177,11 @@ pub fn error_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil
 ///
 /// The namespace is prepended to every message formatted with `Text` and
 /// included as a `"ns"` field in `Json` output.
-///
-/// ```gleam
-/// let log = woof.new("database")
-/// log |> woof.log(woof.Info, "Connected", [#("host", "localhost")])
-/// ```
 pub fn new(namespace: String) -> Logger {
   Logger(namespace: namespace)
 }
 
 /// Log a message through a namespaced logger.
-///
-/// ```gleam
-/// let log = woof.new("http")
-/// log |> woof.log(woof.Warning, "Slow response", [#("ms", "1200")])
-/// ```
 pub fn log(
   logger: Logger,
   level: Level,
@@ -257,46 +192,26 @@ pub fn log(
 }
 
 // ---------------------------------------------------------------------------
-// Context
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Field helpers — automatic type conversion
 // ---------------------------------------------------------------------------
 
 /// Create a string field. Same as writing `#(key, value)` directly, but
 /// reads nicely alongside the typed helpers.
-///
-/// ```gleam
-/// woof.info("Request", [woof.field("path", "/api/users")])
-/// ```
 pub fn field(key: String, value: String) -> #(String, String) {
   #(key, value)
 }
 
 /// Create a field from an `Int`.
-///
-/// ```gleam
-/// woof.info("Response", [woof.int_field("status", 200)])
-/// ```
 pub fn int_field(key: String, value: Int) -> #(String, String) {
   #(key, int.to_string(value))
 }
 
 /// Create a field from a `Float`.
-///
-/// ```gleam
-/// woof.info("Timing", [woof.float_field("duration_ms", 12.5)])
-/// ```
 pub fn float_field(key: String, value: Float) -> #(String, String) {
   #(key, float.to_string(value))
 }
 
 /// Create a field from a `Bool`.
-///
-/// ```gleam
-/// woof.info("Cache", [woof.bool_field("hit", True)])
-/// ```
 pub fn bool_field(key: String, value: Bool) -> #(String, String) {
   #(key, bool.to_string(value))
 }
@@ -320,11 +235,6 @@ pub fn bool_field(key: String, value: Bool) -> #(String, String) {
 /// modifies a global state. If your callback enters an async sleep/promise,
 /// the context might be overwritten by other concurrent tasks. Use with 
 /// caution in highly concurrent async Node/Deno servers.
-///
-/// ```gleam
-/// use <- woof.with_context([#("request_id", req.id)])
-/// woof.info("Processing", [])   // includes request_id automatically
-/// ```
 pub fn with_context(fields: List(#(String, String)), body: fn() -> a) -> a {
   let previous = ffi_get_context([])
   ffi_set_context(list.append(previous, fields))
@@ -336,13 +246,6 @@ pub fn with_context(fields: List(#(String, String)), body: fn() -> a) -> a {
 /// Set fields that appear on **every** log message globally.
 ///
 /// Typically called once at application start.
-///
-/// ```gleam
-/// woof.set_global_context([
-///   #("app", "my-service"),
-///   #("version", "1.2.0"),
-/// ])
-/// ```
 pub fn set_global_context(fields: List(#(String, String))) -> Nil {
   let state = read_state()
   write_state(State(..state, global_context: fields))
@@ -354,12 +257,6 @@ pub fn set_global_context(fields: List(#(String, String))) -> Nil {
 
 /// Log the value at Info level and pass it through.  Fits naturally in
 /// pipelines.
-///
-/// ```gleam
-/// fetch_user(id)
-/// |> woof.tap_info("Fetched user", [])
-/// |> transform_user()
-/// ```
 pub fn tap_info(value: a, message: String, fields: List(#(String, String))) -> a {
   info(message, fields)
   value
@@ -401,12 +298,6 @@ pub fn tap_error(
 
 /// If the `Result` is `Error`, log the message at Error level and pass
 /// the original value through — useful in result pipelines.
-///
-/// ```gleam
-/// fetch_data()
-/// |> woof.log_error("Failed to fetch data", [])
-/// |> result.unwrap(default)
-/// ```
 pub fn log_error(
   res: Result(a, b),
   message: String,
@@ -428,11 +319,6 @@ pub fn log_error(
 /// Measure how long `body` takes and log it at Info level.
 ///
 /// Returns whatever `body` returns — the timing log is a side effect.
-///
-/// ```gleam
-/// use <- woof.time("db_query")
-/// database.query(sql)
-/// ```
 pub fn time(label: String, body: fn() -> a) -> a {
   let start = ffi_monotonic_now()
   let result = body()
@@ -451,10 +337,6 @@ pub fn time(label: String, body: fn() -> a) -> a {
 ///
 /// Handy for testing, previews, or sending formatted output to a custom
 /// sink (file, HTTP, etc.).
-///
-/// ```gleam
-/// let line = woof.format(entry, woof.Json)
-/// ```
 pub fn format(entry: Entry, output_format: Format) -> String {
   format_entry(entry, output_format, Never)
 }
@@ -462,10 +344,6 @@ pub fn format(entry: Entry, output_format: Format) -> String {
 /// Return the lowercase name of a level.
 ///
 /// Useful inside `Custom` formatters.
-///
-/// ```gleam
-/// woof.level_name(woof.Warning)  // -> "warning"
-/// ```
 pub fn level_name(level: Level) -> String {
   case level {
     Debug -> "debug"
@@ -658,7 +536,14 @@ fn format_compact(entry: Entry) -> String {
     None -> ""
     Some(n) -> " ns=" <> n
   }
-  let base = tag <> " " <> entry.timestamp <> ns <> " " <> entry.message
+
+  let msg =
+    entry.message
+    |> string.replace("\\", "\\\\")
+    |> string.replace("\n", "\\n")
+    |> string.replace("\r", "\\r")
+
+  let base = tag <> " " <> entry.timestamp <> ns <> " " <> msg
   case entry.fields {
     [] -> base
     fields -> {
@@ -668,9 +553,19 @@ fn format_compact(entry: Entry) -> String {
           let needs_quotes =
             string.contains(v, " ")
             || string.contains(v, "=")
+            || string.contains(v, "\n")
+            || string.contains(v, "\r")
             || string.is_empty(v)
+
           let val = case needs_quotes {
-            True -> "\"" <> string.replace(v, "\"", "\\\"") <> "\""
+            True ->
+              "\""
+              <> v
+              |> string.replace("\\", "\\\\")
+              |> string.replace("\"", "\\\"")
+              |> string.replace("\n", "\\n")
+              |> string.replace("\r", "\\r")
+              <> "\""
             False -> v
           }
           k <> "=" <> val
@@ -686,29 +581,31 @@ fn format_compact(entry: Entry) -> String {
 /// Example:
 ///   {"level":"info","time":"2026-…","msg":"Server started","port":"3000"}
 fn format_json(entry: Entry) -> String {
-  let base = [
-    json_pair("level", level_name(entry.level)),
-    json_pair("time", entry.timestamp),
-  ]
-  let with_ns = case entry.namespace {
-    None -> base
-    Some(ns) -> list.append(base, [json_pair("ns", ns)])
+  let core = case entry.namespace {
+    Some(ns) -> [
+      json_pair("level", level_name(entry.level)),
+      json_pair("time", entry.timestamp),
+      json_pair("ns", ns),
+      json_pair("msg", entry.message),
+    ]
+    None -> [
+      json_pair("level", level_name(entry.level)),
+      json_pair("time", entry.timestamp),
+      json_pair("msg", entry.message),
+    ]
   }
-  let with_msg = list.append(with_ns, [json_pair("msg", entry.message)])
-  let with_fields =
-    list.append(
-      with_msg,
-      list.map(entry.fields, fn(f) {
-        let #(k, v) = f
-        let safe_k = case k {
-          "level" | "time" | "ns" | "msg" -> "_" <> k
-          _ -> k
-        }
-        json_pair(safe_k, v)
-      }),
-    )
 
-  "{" <> string.join(with_fields, ",") <> "}"
+  let user_fields =
+    list.map(entry.fields, fn(f) {
+      let #(k, v) = f
+      let safe_k = case k {
+        "level" | "time" | "ns" | "msg" -> "_" <> k
+        _ -> k
+      }
+      json_pair(safe_k, v)
+    })
+
+  "{" <> string.join(list.append(core, user_fields), ",") <> "}"
 }
 
 fn json_pair(key: String, value: String) -> String {
