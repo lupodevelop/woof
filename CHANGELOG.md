@@ -3,6 +3,13 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-03-07
+### Fixed
+- Fixed a detached doc comment warning in `woof.gleam` during compilation.
+- Proper escaping of newlines (`\n`, `\r`) and backslashes in `Compact` format output, ensuring multi-line log messages don't break logfmt parsers.
+- Improved the performance of JSON format structure assembly by batching list elements and reducing sequential `list.append` operations.
+- Made public API doc comments more conversational and readable.
+
 ## [1.0.2] - 2026-03-03
 ### Fixed
 - Changed `Compact` format to wrap values in quotes when they contain spaces, `=` or are empty, conforming more closely to logfmt parsers.
