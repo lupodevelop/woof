@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Notes
 - Change is fully backwards-compatible; existing code compiled against 1.0.3 or earlier will function without modification.
-- This enhancement paves the way for external adapters (e.g. `woof_bowl`) that implement advanced features such as log rotation, batching, or remote ingestion.
+- This enhancement paves the way for external adapters that implement advanced features such as log rotation, batching, or remote ingestion.
 
 ## [1.0.3] - 2026-03-07
 ### Fixed
