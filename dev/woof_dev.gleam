@@ -1,10 +1,3 @@
-// woof_dev.gleam — interactive dev entrypoint
-//
-// Run with:   gleam dev
-//
-// This module exercises every public API in woof, printing output to the
-// terminal. Each numbered section covers one area of the public API.
-
 import gleam/io
 import gleam/list
 import gleam/option.{None}

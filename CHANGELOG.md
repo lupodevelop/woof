@@ -3,6 +3,16 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-03-07
+### Added
+- Introduced `Sink` type and `set_sink/1` function allowing clients to provide custom side-effect handlers (e.g. write to file, send over network).
+- Public `default_sink/2` function exposed so custom sinks can delegate to the original console printer.
+- Updated internal state to carry the configured sink; defaults continue to behave exactly as before.
+
+### Notes
+- Change is fully backwards-compatible; existing code compiled against 1.0.3 or earlier will function without modification.
+- This enhancement paves the way for external adapters that implement advanced features such as log rotation, batching, or remote ingestion.
+
 ## [1.0.3] - 2026-03-07
 ### Fixed
 - Fixed a detached doc comment warning in `woof.gleam` during compilation.
