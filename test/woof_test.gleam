@@ -895,6 +895,37 @@ pub fn beam_logger_sink_all_levels_reach_logger_test() {
 }
 
 // ---------------------------------------------------------------------------
+// 1.2.0 Additions
+// ---------------------------------------------------------------------------
+
+pub fn is_enabled_test() {
+  reset()
+  woof.set_level(woof.Warning)
+  woof.is_enabled(woof.Debug) |> should.be_false
+  woof.is_enabled(woof.Info) |> should.be_false
+  woof.is_enabled(woof.Warning) |> should.be_true
+  woof.is_enabled(woof.Error) |> should.be_true
+  reset()
+}
+
+pub fn silent_sink_discards_output_test() {
+  reset()
+  woof.set_sink(woof.silent_sink)
+  woof.error("silent error", [])
+  reset()
+}
+
+pub fn append_global_context_adds_to_existing_test() {
+  reset()
+  woof.set_global_context([#("app", "test")])
+  woof.append_global_context([#("env", "ci")])
+
+  woof.get_global_context()
+  |> should.equal([#("app", "test"), #("env", "ci")])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
 // Visual demo — prints real output to the terminal
 // ---------------------------------------------------------------------------
 
