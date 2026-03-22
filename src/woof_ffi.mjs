@@ -53,6 +53,27 @@ export function is_tty() {
   return false;
 }
 
+// Route a log event through the level-aware console API.
+// Used by woof's beam_logger_sink/2 — the opt-in production sink.
+// On JS there is no centralised logger equivalent to OTP, so we use
+// console.debug/info/warn/error so browser DevTools and Node.js can
+// filter by severity.  The pre-formatted string is used so woof's own
+// Text/Compact/JSON formatting is preserved.
+export function beam_log(level, _message, _fields, _namespace, formatted) {
+  const name = level.constructor.name;
+  if (name === "Debug") {
+    console.debug(formatted);
+  } else if (name === "Info") {
+    console.info(formatted);
+  } else if (name === "Warning") {
+    console.warn(formatted);
+  } else if (name === "Error") {
+    console.error(formatted);
+  } else {
+    console.log(formatted);
+  }
+}
+
 export function get_env(name) {
   try {
     if (typeof process !== "undefined" && process.env) {

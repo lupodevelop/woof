@@ -1,6 +1,11 @@
 -module(woof_ffi).
 -export([get_state/1, set_state/1, get_context/1, set_context/1,
-         now/0, monotonic_now/0, is_tty/0, get_env/1]).
+         now/0, monotonic_now/0, is_tty/0, get_env/1,
+         beam_log/5,
+         install_test_handler/0, remove_test_handler/0, pop_test_event/0,
+         test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
+         test_event_fields/1, test_event_namespace/1,
+         log/2]).
 
 %% woof FFI — Erlang target
 %% Global config — stored in persistent_term (erts, always available).
@@ -57,6 +62,21 @@ is_tty() ->
             false
     end.
 
+%% Route a log event through the OTP logger (OTP 21+).
+%% Used by woof:beam_logger_sink/2 — the opt-in production sink.
+%% Level is a Gleam atom (debug/info/warning/error) — matches OTP levels.
+%% Fields are passed as logger metadata under the `fields` key.
+%% Namespace, when present, is included in metadata under `namespace`.
+%% The pre-formatted string is unused; BEAM logger handlers own the output.
+
+beam_log(Level, Message, Fields, Namespace, _Formatted) ->
+    Meta0 = #{domain => [woof], fields => Fields},
+    Meta = case Namespace of
+        none         -> Meta0;
+        {some, NS}   -> Meta0#{namespace => NS}
+    end,
+    logger:log(Level, "~ts", [Message], Meta).
+
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 
 get_env(Name) ->
@@ -64,3 +84,78 @@ get_env(Name) ->
         false -> {error, nil};
         Value -> {ok, list_to_binary(Value)}
     end.
+
+%% ── Test utilities for beam_logger_sink ────────────────────────────────────
+%% Called only from the test suite to verify that beam_logger_sink routes
+%% events through OTP logger:log/4 with the correct metadata.
+%%
+%% install_test_handler/0 — adds this module as a logger handler and saves the
+%%   current primary level (restoring it on remove).
+%% remove_test_handler/0  — removes the handler and restores primary level.
+%% pop_test_event/0       — dequeues the earliest captured woof event; returns
+%%   {ok, Event} or {error, nil} when the queue is empty.
+%% Accessor functions decode individual fields from a captured event map.
+
+install_test_handler() ->
+    #{level := OldLevel} = logger:get_primary_config(),
+    persistent_term:put(woof_test_old_primary_level, OldLevel),
+    logger:set_primary_config(level, all),
+    try ets:delete(woof_test_events) catch _:_ -> ok end,
+    ets:new(woof_test_events, [named_table, public, ordered_set]),
+    case logger:add_handler(woof_test_handler, woof_ffi, #{level => all}) of
+        ok                          -> nil;
+        {error, {already_exist, _}} -> nil
+    end.
+
+remove_test_handler() ->
+    logger:remove_handler(woof_test_handler),
+    OldLevel = persistent_term:get(woof_test_old_primary_level, notice),
+    logger:set_primary_config(level, OldLevel),
+    try ets:delete(woof_test_events) catch _:_ -> ok end,
+    nil.
+
+pop_test_event() ->
+    case ets:first(woof_test_events) of
+        '$end_of_table' ->
+            {error, nil};
+        Key ->
+            [{Key, Event}] = ets:lookup(woof_test_events, Key),
+            ets:delete(woof_test_events, Key),
+            {ok, Event}
+    end.
+
+test_event_level(Event) ->
+    atom_to_binary(maps:get(level, Event), utf8).
+
+test_event_message(Event) ->
+    maps:get(message, Event).
+
+test_event_domain_is_woof(Event) ->
+    maps:get(domain, Event) =:= [woof].
+
+test_event_fields(Event) ->
+    maps:get(fields, Event).
+
+test_event_namespace(Event) ->
+    maps:get(namespace, Event).
+
+%% OTP logger handler callback.
+%% Only woof events (domain=[woof]) are captured; everything else is ignored.
+log(#{level := Level,
+      msg   := {_Format, [Message]},
+      meta  := #{domain := [woof]} = Meta}, _Config) ->
+    Fields    = maps:get(fields,    Meta, []),
+    Namespace = case maps:get(namespace, Meta, undefined) of
+        undefined -> none;
+        NS        -> {some, NS}
+    end,
+    Key = erlang:monotonic_time(),
+    ets:insert(woof_test_events, {Key, #{
+        level     => Level,
+        message   => Message,
+        domain    => [woof],
+        fields    => Fields,
+        namespace => Namespace
+    }});
+log(_LogEvent, _Config) ->
+    ok.

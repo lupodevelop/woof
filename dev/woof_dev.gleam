@@ -37,7 +37,7 @@ fn reset() -> Nil {
 pub fn main() -> Nil {
   io.println("")
   io.println("╔══════════════════════════════════════════════════════╗")
-  io.println("║          w o o f   —   dev demo (v1.0.2)             ║")
+  io.println("║          w o o f   —   dev demo (v1.2.0)             ║")
   io.println("╚══════════════════════════════════════════════════════╝")
 
   demo_basic_levels()
@@ -58,6 +58,7 @@ pub fn main() -> Nil {
   demo_time()
   demo_format_utility()
   demo_level_name()
+  demo_sinks()
 
   io.println("")
   io.println("═══════════════════════════════════════════════════════")
@@ -490,6 +491,54 @@ fn demo_format_utility() -> Nil {
   io.println("  text   → " <> text_line)
   io.println("  compact→ " <> compact_line)
   io.println("  json   → " <> json_line)
+}
+
+// ---------------------------------------------------------------------------
+// 19. Sinks — default_sink / beam_logger_sink / custom sinks
+// ---------------------------------------------------------------------------
+
+fn demo_sinks() -> Nil {
+  reset()
+  sep("19 · Sinks — default_sink / beam_logger_sink / custom")
+
+  note("default_sink → io.println (the default, output is what you see here)")
+  woof.set_sink(woof.default_sink)
+  woof.info("Using default_sink", [woof.field("target", "stdout")])
+  woof.debug("Still the same beautiful output", [])
+
+  note(
+    "beam_logger_sink → routes through OTP logger (output appears via BEAM handler, above this block)",
+  )
+  note("set_sink(beam_logger_sink) is the single line you add in production")
+  woof.set_sink(woof.beam_logger_sink)
+  woof.info("Routed through OTP logger", [
+    woof.field("domain", "[woof]"),
+    woof.field("handler", "default"),
+  ])
+  woof.warning("BEAM logger owns format and routing now", [])
+  woof.error("Apps can silence this with logger:add_primary_filter", [])
+
+  note("custom sink — receives both the structured Entry and the formatted string")
+  reset()
+  woof.set_format(woof.Json)
+  woof.set_sink(fn(entry, formatted) {
+    io.println(
+      "  level  → " <> woof.level_name(entry.level) <> " | msg → " <> entry.message,
+    )
+    io.println("  fields → " <> string.inspect(entry.fields))
+    io.println("  fmt    → " <> formatted)
+    io.println("")
+  })
+  woof.info("Custom sink sees everything", [
+    woof.field("key", "value"),
+    woof.int_field("count", 3),
+  ])
+  woof.error("Error through custom sink", [woof.field("code", "ERR_42")])
+
+  note("restore default_sink for a clean finish")
+  reset()
+  woof.set_sink(woof.default_sink)
+  woof.info("Back to default_sink", [])
 }
 
 // ---------------------------------------------------------------------------

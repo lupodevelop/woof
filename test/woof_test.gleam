@@ -1,5 +1,6 @@
+import gleam/dynamic.{type Dynamic}
 import gleam/io
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -20,6 +21,7 @@ fn reset() {
     colors: woof.Never,
   ))
   woof.set_global_context([])
+  woof.set_sink(woof.default_sink)
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +676,221 @@ pub fn field_helpers_in_log_call_test() {
     woof.bool_field("cached", True),
   ])
 
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// Sinks
+// ---------------------------------------------------------------------------
+
+pub fn sink_receives_entry_and_formatted_string_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Text,
+    colors: woof.Never,
+  ))
+
+  woof.set_sink(fn(entry, formatted) {
+    entry.level |> should.equal(woof.Warning)
+    entry.message |> should.equal("disk full")
+    entry.fields |> should.equal([#("path", "/var")])
+    formatted |> string.starts_with("[WARN]") |> should.be_true
+    formatted |> string.contains("disk full") |> should.be_true
+  })
+
+  woof.warning("disk full", [#("path", "/var")])
+  reset()
+}
+
+pub fn sink_formatted_string_matches_active_format_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Json,
+    colors: woof.Never,
+  ))
+
+  woof.set_sink(fn(_entry, formatted) {
+    formatted |> string.starts_with("{\"level\"") |> should.be_true
+  })
+
+  woof.info("json sink test", [])
+  reset()
+}
+
+pub fn sink_receives_entry_with_namespace_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Text,
+    colors: woof.Never,
+  ))
+
+  woof.set_sink(fn(entry, _formatted) {
+    entry.namespace |> should.equal(Some("payments"))
+    entry.message |> should.equal("tx complete")
+  })
+
+  let log = woof.new("payments")
+  log |> woof.log(woof.Info, "tx complete", [])
+  reset()
+}
+
+pub fn sink_receives_merged_context_fields_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Text,
+    colors: woof.Never,
+  ))
+  woof.set_global_context([#("app", "test")])
+
+  woof.set_sink(fn(entry, _formatted) {
+    // global + scoped + inline, in order
+    entry.fields
+    |> should.equal([#("app", "test"), #("req", "r1"), #("k", "v")])
+  })
+
+  woof.with_context([#("req", "r1")], fn() { woof.info("msg", [#("k", "v")]) })
+  reset()
+}
+
+pub fn default_sink_can_be_restored_test() {
+  reset()
+  // Swap out sink then put default back — no panic on emission.
+  woof.set_sink(fn(_entry, _formatted) { Nil })
+  woof.set_sink(woof.default_sink)
+  reset()
+}
+
+pub fn beam_logger_sink_does_not_crash_test() {
+  reset()
+  // beam_logger_sink routes through OTP logger.  Output may appear above
+  // this test block in the terminal (OTP logger format) — that is expected.
+  woof.set_sink(woof.beam_logger_sink)
+  woof.debug("beam debug", [woof.field("sink", "beam")])
+  woof.info("beam info", [woof.field("sink", "beam")])
+  woof.warning("beam warning", [woof.field("sink", "beam")])
+  woof.error("beam error", [woof.field("sink", "beam")])
+  reset()
+}
+
+pub fn beam_logger_sink_works_with_namespace_and_fields_test() {
+  reset()
+  woof.set_sink(woof.beam_logger_sink)
+  let log = woof.new("db")
+  log
+  |> woof.log(woof.Info, "query ok", [
+    woof.int_field("ms", 12),
+    woof.field("table", "orders"),
+  ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// BEAM logger integration — verification that logger:log/4 is actually called
+// (Erlang target only: relies on OTP logger handler API)
+// ---------------------------------------------------------------------------
+
+@target(erlang)
+@external(erlang, "woof_ffi", "install_test_handler")
+fn install_test_handler() -> Nil
+
+@target(erlang)
+@external(erlang, "woof_ffi", "remove_test_handler")
+fn remove_test_handler() -> Nil
+
+@target(erlang)
+@external(erlang, "woof_ffi", "pop_test_event")
+fn pop_test_event() -> Result(Dynamic, Nil)
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_level")
+fn test_event_level(event: Dynamic) -> String
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_message")
+fn test_event_message(event: Dynamic) -> String
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_domain_is_woof")
+fn test_event_domain_is_woof(event: Dynamic) -> Bool
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_fields")
+fn test_event_fields(event: Dynamic) -> List(#(String, String))
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_namespace")
+fn test_event_namespace(event: Dynamic) -> Option(String)
+
+@target(erlang)
+pub fn beam_logger_sink_calls_logger_log_test() {
+  reset()
+  install_test_handler()
+  woof.set_sink(woof.beam_logger_sink)
+
+  woof.info("otp logger test", [woof.field("key", "val")])
+
+  let assert Ok(event) = pop_test_event()
+  test_event_level(event) |> should.equal("info")
+  test_event_message(event) |> should.equal("otp logger test")
+  test_event_domain_is_woof(event) |> should.be_true
+  test_event_fields(event) |> should.equal([#("key", "val")])
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
+pub fn beam_logger_sink_metadata_includes_namespace_test() {
+  reset()
+  install_test_handler()
+  woof.set_sink(woof.beam_logger_sink)
+
+  let log = woof.new("srv")
+  log |> woof.log(woof.Warning, "ns test", [woof.field("x", "1")])
+
+  let assert Ok(event) = pop_test_event()
+  test_event_level(event) |> should.equal("warning")
+  test_event_message(event) |> should.equal("ns test")
+  test_event_domain_is_woof(event) |> should.be_true
+  test_event_fields(event) |> should.equal([#("x", "1")])
+  test_event_namespace(event) |> should.equal(Some("srv"))
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
+pub fn beam_logger_sink_all_levels_reach_logger_test() {
+  reset()
+  install_test_handler()
+  woof.set_sink(woof.beam_logger_sink)
+
+  woof.debug("lvl debug", [])
+  woof.info("lvl info", [])
+  woof.warning("lvl warning", [])
+  woof.error("lvl error", [])
+
+  let assert Ok(e1) = pop_test_event()
+  test_event_level(e1) |> should.equal("debug")
+  test_event_message(e1) |> should.equal("lvl debug")
+
+  let assert Ok(e2) = pop_test_event()
+  test_event_level(e2) |> should.equal("info")
+  test_event_message(e2) |> should.equal("lvl info")
+
+  let assert Ok(e3) = pop_test_event()
+  test_event_level(e3) |> should.equal("warning")
+  test_event_message(e3) |> should.equal("lvl warning")
+
+  let assert Ok(e4) = pop_test_event()
+  test_event_level(e4) |> should.equal("error")
+  test_event_message(e4) |> should.equal("lvl error")
+
+  remove_test_handler()
   reset()
 }
 
