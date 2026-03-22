@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`silent_sink/2`** — a builtin sink that completely discards log events, useful for muting logs during test runs.
+- **`is_enabled/1`** — check if a specific log level is currently enabled, useful for bypassing expensive work.
+- **`get_global_context/0`** and **`append_global_context/1`** — retrieve or incrementally build the global context.
 - **`beam_logger_sink/2`** — a new public sink for production OTP
   applications. When set via `woof.set_sink(woof.beam_logger_sink)`, every
   log event is delivered to OTP's `logger` module (available since OTP 21)

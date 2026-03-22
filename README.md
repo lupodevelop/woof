@@ -203,6 +203,8 @@ woof.set_global_context([
 ])
 ```
 
+You can also read the current context with `woof.get_global_context()` or incrementally add fields using `woof.append_global_context([#("key", "value")])`.
+
 ## Configuration
 
 For one-shot setup, use `configure`:
@@ -235,6 +237,7 @@ The active sink is set with `set_sink`. woof ships two ready-made sinks:
 |---------------------|----------------------------------------------|
 | `default_sink`      | Development, scripts, CLI tools (default)    |
 | `beam_logger_sink`  | Production OTP applications                  |
+| `silent_sink`       | Discard all logs (useful for test suites)    |
 
 ### Custom sinks
 
@@ -413,6 +416,14 @@ woof.debug_lazy(fn() { expensive_debug_dump(state) }, [])
 
 Available: `debug_lazy`, `info_lazy`, `warning_lazy`, `error_lazy`.
 
+You can also manually check if a level is enabled before doing setup work:
+```gleam
+if woof.is_enabled(woof.Debug) {
+  let complex_data = do_expensive_work()
+  woof.debug("Done", [woof.field("data", complex_data)])
+}
+```
+
 ## Pipeline helpers
 
 ### tap
@@ -469,8 +480,11 @@ Emits: `db_query completed` with a `duration_ms` field.
 | `set_format`            | Change the output format                       |
 | `set_colors`            | Change color mode (Auto/Always/Never)          |
 | `set_global_context`    | Set app-wide fields                            |
+|                     ... | See `get_global_context`, `append_global_context`|
 | `set_sink`              | Replace the output sink                        |
 | `default_sink`          | The built-in sink (BEAM logger / console)      |
+| `silent_sink`           | Discard all logs                               |
+| `is_enabled`            | Check if a log level is currently enabled      |
 | `with_context`          | Scoped fields for a callback                   |
 | `tap_debug`…`tap_error` | Log and pass a value through                   |
 | `log_error`             | Log on Result Error, pass through              |
