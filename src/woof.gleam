@@ -115,6 +115,15 @@ pub fn set_level(level: Level) -> Nil {
   write_state(State(..state, level: level))
 }
 
+/// Check if a specific log level is currently enabled.
+///
+/// Useful if you need to perform expensive work before emitting several
+/// log messages, and want to skip that work if the level is silenced.
+pub fn is_enabled(level: Level) -> Bool {
+  let state = read_state()
+  should_log(level, state.level)
+}
+
 /// Set the output format.
 pub fn set_format(format: Format) -> Nil {
   let state = read_state()
@@ -182,6 +191,14 @@ pub fn beam_logger_sink(entry: Entry, formatted: String) -> Nil {
     entry.namespace,
     formatted,
   )
+}
+
+/// A sink that does nothing and discards all log events.
+///
+/// Useful for muting logs entirely, for example during test runs:
+/// `woof.set_sink(woof.silent_sink)`
+pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
+  Nil
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +334,18 @@ pub fn with_context(fields: List(#(String, String)), body: fn() -> a) -> a {
 pub fn set_global_context(fields: List(#(String, String))) -> Nil {
   let state = read_state()
   write_state(State(..state, global_context: fields))
+}
+
+/// Get the current global context fields.
+pub fn get_global_context() -> List(#(String, String)) {
+  let state = read_state()
+  state.global_context
+}
+
+/// Append fields to the global context without replacing the existing ones.
+pub fn append_global_context(fields: List(#(String, String))) -> Nil {
+  let current = get_global_context()
+  set_global_context(list.append(current, fields))
 }
 
 // ---------------------------------------------------------------------------
