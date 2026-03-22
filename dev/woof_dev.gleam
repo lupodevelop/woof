@@ -518,12 +518,17 @@ fn demo_sinks() -> Nil {
   woof.warning("BEAM logger owns format and routing now", [])
   woof.error("Apps can silence this with logger:add_primary_filter", [])
 
-  note("custom sink — receives both the structured Entry and the formatted string")
+  note(
+    "custom sink — receives both the structured Entry and the formatted string",
+  )
   reset()
   woof.set_format(woof.Json)
   woof.set_sink(fn(entry, formatted) {
     io.println(
-      "  level  → " <> woof.level_name(entry.level) <> " | msg → " <> entry.message,
+      "  level  → "
+      <> woof.level_name(entry.level)
+      <> " | msg → "
+      <> entry.message,
     )
     io.println("  fields → " <> string.inspect(entry.fields))
     io.println("  fmt    → " <> formatted)
