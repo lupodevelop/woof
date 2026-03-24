@@ -63,11 +63,11 @@ export function beam_log(level, _message, _fields, _namespace, formatted) {
   const name = level.constructor.name;
   if (name === "Debug") {
     console.debug(formatted);
-  } else if (name === "Info") {
+  } else if (name === "Info" || name === "Notice") {
     console.info(formatted);
   } else if (name === "Warning") {
     console.warn(formatted);
-  } else if (name === "Error") {
+  } else if (name === "Error" || name === "Critical" || name === "Alert" || name === "Emergency") {
     console.error(formatted);
   } else {
     console.log(formatted);

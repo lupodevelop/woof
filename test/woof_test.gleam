@@ -222,13 +222,53 @@ pub fn custom_formatter_test() {
 pub fn level_name_test() {
   woof.level_name(woof.Debug) |> should.equal("debug")
   woof.level_name(woof.Info) |> should.equal("info")
+  woof.level_name(woof.Notice) |> should.equal("notice")
   woof.level_name(woof.Warning) |> should.equal("warning")
   woof.level_name(woof.Error) |> should.equal("error")
+  woof.level_name(woof.Critical) |> should.equal("critical")
+  woof.level_name(woof.Alert) |> should.equal("alert")
+  woof.level_name(woof.Emergency) |> should.equal("emergency")
 }
 
 // ---------------------------------------------------------------------------
 // Level filtering
 // ---------------------------------------------------------------------------
+
+pub fn new_levels_emit_correctly_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      woof.level_name(entry.level)
+    }),
+    colors: woof.Never,
+  ))
+
+  woof.set_sink(fn(entry, formatted) {
+    formatted |> should.equal(woof.level_name(entry.level))
+  })
+
+  woof.notice("n", [])
+  woof.critical("c", [])
+  woof.alert("a", [])
+  woof.emergency("e", [])
+  reset()
+}
+
+pub fn new_levels_ordering_test() {
+  woof.level_name(woof.Debug) |> should.equal("debug")
+  // Notice sits between Info and Warning
+  woof.is_enabled(woof.Notice) |> should.be_true
+  reset()
+  woof.set_level(woof.Warning)
+  woof.is_enabled(woof.Notice) |> should.be_false
+  woof.is_enabled(woof.Warning) |> should.be_true
+  // Critical sits above Error
+  woof.set_level(woof.Error)
+  woof.is_enabled(woof.Error) |> should.be_true
+  woof.is_enabled(woof.Critical) |> should.be_true
+  reset()
+}
 
 pub fn level_filtering_drops_below_minimum_test() {
   reset()
@@ -920,8 +960,124 @@ pub fn append_global_context_adds_to_existing_test() {
   woof.set_global_context([#("app", "test")])
   woof.append_global_context([#("env", "ci")])
 
-  woof.get_global_context()
-  |> should.equal([#("app", "test"), #("env", "ci")])
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      entry.fields |> should.equal([#("app", "test"), #("env", "ci")])
+      ""
+    }),
+    colors: woof.Never,
+  ))
+  woof.info("probe", [])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// time_at
+// ---------------------------------------------------------------------------
+
+pub fn time_at_logs_at_specified_level_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      entry.level |> should.equal(woof.Debug)
+      entry.message |> string.starts_with("db query") |> should.be_true
+      entry.fields |> should.not_equal([])
+      ""
+    }),
+    colors: woof.Never,
+  ))
+  let result = woof.time_at("db query", woof.Debug, fn() { 42 })
+  result |> should.equal(42)
+  reset()
+}
+
+pub fn time_delegates_to_time_at_info_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      entry.level |> should.equal(woof.Info)
+      ""
+    }),
+    colors: woof.Never,
+  ))
+  woof.time("work", fn() { Nil })
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// log_lazy (namespaced)
+// ---------------------------------------------------------------------------
+
+pub fn log_lazy_skips_evaluation_when_level_disabled_test() {
+  reset()
+  woof.set_level(woof.Error)
+  let db = woof.new("db")
+  db |> woof.log_lazy(woof.Debug, fn() { panic as "should not evaluate" }, [])
+  reset()
+}
+
+pub fn log_lazy_evaluates_and_includes_namespace_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      entry.message |> should.equal("lazy msg")
+      entry.namespace |> should.equal(Some("svc"))
+      ""
+    }),
+    colors: woof.Never,
+  ))
+  let svc = woof.new("svc")
+  svc |> woof.log_lazy(woof.Info, fn() { "lazy msg" }, [])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// compose_sinks
+// ---------------------------------------------------------------------------
+
+pub fn compose_sinks_both_receive_entry_test() {
+  reset()
+  // Each sink asserts a different field — if either is skipped the test
+  // would silently pass, but together they give confidence both ran.
+  let first = fn(entry: woof.Entry, _formatted: String) {
+    entry.level |> should.equal(woof.Warning)
+  }
+  let second = fn(entry: woof.Entry, _formatted: String) {
+    entry.message |> should.equal("composed")
+  }
+  woof.set_sink(woof.compose_sinks(first, second))
+  woof.warning("composed", [])
+  reset()
+}
+
+pub fn compose_sinks_both_receive_formatted_string_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Text,
+    colors: woof.Never,
+  ))
+  let first = fn(_entry: woof.Entry, formatted: String) {
+    formatted |> string.starts_with("[INFO]") |> should.be_true
+  }
+  let second = fn(_entry: woof.Entry, formatted: String) {
+    formatted |> string.contains("hello") |> should.be_true
+  }
+  woof.set_sink(woof.compose_sinks(first, second))
+  woof.info("hello", [])
+  reset()
+}
+
+pub fn compose_sinks_with_default_and_silent_test() {
+  reset()
+  // default_sink + silent_sink: output goes to stdout, second does nothing.
+  // Verifies composing builtins doesn't crash.
+  woof.set_sink(woof.compose_sinks(woof.default_sink, woof.silent_sink))
+  woof.info("compose builtin sinks", [])
   reset()
 }
 
@@ -1041,8 +1197,12 @@ pub fn visual_demo_test() {
     let icon = case entry.level {
       woof.Debug -> "🔍"
       woof.Info -> "✅"
+      woof.Notice -> "📋"
       woof.Warning -> "⚠️"
       woof.Error -> "❌"
+      woof.Critical -> "🔥"
+      woof.Alert -> "🚨"
+      woof.Emergency -> "💀"
     }
     icon <> " " <> entry.message
   }

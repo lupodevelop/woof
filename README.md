@@ -203,7 +203,7 @@ woof.set_global_context([
 ])
 ```
 
-You can also read the current context with `woof.get_global_context()` or incrementally add fields using `woof.append_global_context([#("key", "value")])`.
+You can also incrementally add fields to the global context using `woof.append_global_context([#("key", "value")])`.
 
 ## Configuration
 

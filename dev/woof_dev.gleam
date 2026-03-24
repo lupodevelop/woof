@@ -220,8 +220,12 @@ fn demo_format_custom() -> Nil {
       let icon = case entry.level {
         woof.Debug -> "🔍"
         woof.Info -> "✅"
+        woof.Notice -> "📋"
         woof.Warning -> "⚠️ "
         woof.Error -> "❌"
+        woof.Critical -> "🔥"
+        woof.Alert -> "🚨"
+        woof.Emergency -> "💀"
       }
       let fields_str =
         list.map(entry.fields, fn(f) { " [" <> f.0 <> "=" <> f.1 <> "]" })

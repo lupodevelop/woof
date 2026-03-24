@@ -3,13 +3,54 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-03-22
+
+### Breaking Changes
+
+- **`Level` type extended to all 8 OTP levels.** The four new variants
+  (`Notice`, `Critical`, `Alert`, `Emergency`) make every `case level { ... }`
+  expression non-exhaustive — the Gleam compiler will point out exactly which
+  branches need to be added.
+- **`Error` color changed** from bold red to plain red so that `Critical` (bold
+  red) is visually more severe, matching the new ordering.
+
+### Added
+
+- **`Notice`, `Critical`, `Alert`, `Emergency`** variants in `Level`, matching
+  the full OTP logger level set in the correct order:
+  `Debug < Info < Notice < Warning < Error < Critical < Alert < Emergency`.
+- **`notice/2`, `critical/2`, `alert/2`, `emergency/2`** — shortcut log
+  functions for the four new levels.
+- **`notice_lazy/2`, `critical_lazy/2`, `alert_lazy/2`, `emergency_lazy/2`**
+  — lazy variants for expensive message construction.
+
+### Migration from v1.x
+
+Add the missing branches to any exhaustive `case` on `Level`:
+
+```gleam
+case level {
+  woof.Debug    -> ...
+  woof.Info     -> ...
+  woof.Notice   -> ...   // new
+  woof.Warning  -> ...
+  woof.Error    -> ...
+  woof.Critical -> ...   // new
+  woof.Alert    -> ...   // new
+  woof.Emergency -> ...  // new
+}
+```
+
 ## [1.2.0] - 2026-03-22
 
 ### Added
 
 - **`silent_sink/2`** — a builtin sink that completely discards log events, useful for muting logs during test runs.
 - **`is_enabled/1`** — check if a specific log level is currently enabled, useful for bypassing expensive work.
-- **`get_global_context/0`** and **`append_global_context/1`** — retrieve or incrementally build the global context.
+- **`append_global_context/1`** — incrementally add fields to the global context without replacing the existing ones.
+- **`time_at/3`** — like `time/2` but logs at a caller-chosen level; `time/2` now delegates to `time_at` at `Info`.
+- **`log_lazy/4`** — lazy-evaluated counterpart of `log/4` on namespaced loggers; the message thunk is skipped when the level is disabled.
+- **`compose_sinks/2`** — combine two sinks into one so both receive every event. Useful when you want woof's terminal output and OTP logger integration simultaneously: `woof.compose_sinks(woof.default_sink, woof.beam_logger_sink)`.
 - **`beam_logger_sink/2`** — a new public sink for production OTP
   applications. When set via `woof.set_sink(woof.beam_logger_sink)`, every
   log event is delivered to OTP's `logger` module (available since OTP 21)

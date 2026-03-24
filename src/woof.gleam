@@ -13,13 +13,20 @@ import gleam/string
 
 /// Log severity levels, ordered from least to most severe.
 ///
+/// The eight levels mirror the OTP logger levels exactly, so events
+/// routed through `beam_logger_sink` carry the correct severity atom.
+///
 /// Only messages at or above the configured minimum level are emitted.
 /// The default level is `Debug` (everything is printed).
 pub type Level {
   Debug
   Info
+  Notice
   Warning
   Error
+  Critical
+  Alert
+  Emergency
 }
 
 /// Controls how log output is formatted.
@@ -201,6 +208,21 @@ pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
   Nil
 }
 
+/// Combine two sinks into one: both are called for every log event.
+///
+/// Useful when you want to keep woof's beautiful terminal output *and*
+/// also route events through OTP logger:
+///
+/// ```gleam
+/// woof.set_sink(woof.compose_sinks(woof.default_sink, woof.beam_logger_sink))
+/// ```
+pub fn compose_sinks(first: Sink, second: Sink) -> Sink {
+  fn(entry, formatted) {
+    first(entry, formatted)
+    second(entry, formatted)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Logging — plain aka (no namespace)
 // ---------------------------------------------------------------------------
@@ -215,6 +237,11 @@ pub fn info(message: String, fields: List(#(String, String))) -> Nil {
   emit(Info, message, fields, None)
 }
 
+/// Log at Notice level.
+pub fn notice(message: String, fields: List(#(String, String))) -> Nil {
+  emit(Notice, message, fields, None)
+}
+
 /// Log at Warning level.
 pub fn warning(message: String, fields: List(#(String, String))) -> Nil {
   emit(Warning, message, fields, None)
@@ -223,6 +250,21 @@ pub fn warning(message: String, fields: List(#(String, String))) -> Nil {
 /// Log at Error level.
 pub fn error(message: String, fields: List(#(String, String))) -> Nil {
   emit(Error, message, fields, None)
+}
+
+/// Log at Critical level.
+pub fn critical(message: String, fields: List(#(String, String))) -> Nil {
+  emit(Critical, message, fields, None)
+}
+
+/// Log at Alert level.
+pub fn alert(message: String, fields: List(#(String, String))) -> Nil {
+  emit(Alert, message, fields, None)
+}
+
+/// Log at Emergency level.
+pub fn emergency(message: String, fields: List(#(String, String))) -> Nil {
+  emit(Emergency, message, fields, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +283,14 @@ pub fn info_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil 
   emit_lazy(Info, build, fields, None)
 }
 
+/// Log at Notice level, evaluating the message only if Notice is enabled.
+pub fn notice_lazy(
+  build: fn() -> String,
+  fields: List(#(String, String)),
+) -> Nil {
+  emit_lazy(Notice, build, fields, None)
+}
+
 /// Log at Warning level, evaluating the message only if Warning is enabled.
 pub fn warning_lazy(
   build: fn() -> String,
@@ -252,6 +302,27 @@ pub fn warning_lazy(
 /// Log at Error level, evaluating the message only if Error is enabled.
 pub fn error_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
   emit_lazy(Error, build, fields, None)
+}
+
+/// Log at Critical level, evaluating the message only if Critical is enabled.
+pub fn critical_lazy(
+  build: fn() -> String,
+  fields: List(#(String, String)),
+) -> Nil {
+  emit_lazy(Critical, build, fields, None)
+}
+
+/// Log at Alert level, evaluating the message only if Alert is enabled.
+pub fn alert_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
+  emit_lazy(Alert, build, fields, None)
+}
+
+/// Log at Emergency level, evaluating the message only if Emergency is enabled.
+pub fn emergency_lazy(
+  build: fn() -> String,
+  fields: List(#(String, String)),
+) -> Nil {
+  emit_lazy(Emergency, build, fields, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +345,19 @@ pub fn log(
   fields: List(#(String, String)),
 ) -> Nil {
   emit(level, message, fields, Some(logger.namespace))
+}
+
+/// Log a lazily-evaluated message through a namespaced logger.
+///
+/// `build` is only called when the level is enabled — use this when
+/// constructing the message string is expensive.
+pub fn log_lazy(
+  logger: Logger,
+  level: Level,
+  build: fn() -> String,
+  fields: List(#(String, String)),
+) -> Nil {
+  emit_lazy(level, build, fields, Some(logger.namespace))
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +421,7 @@ pub fn set_global_context(fields: List(#(String, String))) -> Nil {
 }
 
 /// Get the current global context fields.
-pub fn get_global_context() -> List(#(String, String)) {
+fn get_global_context() -> List(#(String, String)) {
   let state = read_state()
   state.global_context
 }
@@ -416,13 +500,21 @@ pub fn log_error(
 /// Measure how long `body` takes and log it at Info level.
 ///
 /// Returns whatever `body` returns — the timing log is a side effect.
+/// Use `time_at` to log at a different level.
 pub fn time(label: String, body: fn() -> a) -> a {
+  time_at(label, Info, body)
+}
+
+/// Measure how long `body` takes and log it at the given level.
+///
+/// ```gleam
+/// woof.time_at("db query", woof.Debug, fn() { run_query() })
+/// ```
+pub fn time_at(label: String, level: Level, body: fn() -> a) -> a {
   let start = ffi_monotonic_now()
   let result = body()
   let elapsed = ffi_monotonic_now() - start
-  info(label <> " completed", [
-    #("duration_ms", int.to_string(elapsed)),
-  ])
+  emit(level, label <> " completed", [#("duration_ms", int.to_string(elapsed))], None)
   result
 }
 
@@ -445,8 +537,12 @@ pub fn level_name(level: Level) -> String {
   case level {
     Debug -> "debug"
     Info -> "info"
+    Notice -> "notice"
     Warning -> "warning"
     Error -> "error"
+    Critical -> "critical"
+    Alert -> "alert"
+    Emergency -> "emergency"
   }
 }
 
@@ -541,8 +637,12 @@ fn level_to_int(level: Level) -> Int {
   case level {
     Debug -> 0
     Info -> 1
-    Warning -> 2
-    Error -> 3
+    Notice -> 2
+    Warning -> 3
+    Error -> 4
+    Critical -> 5
+    Alert -> 6
+    Emergency -> 7
   }
 }
 
@@ -732,8 +832,12 @@ fn level_tag(level: Level) -> String {
   case level {
     Debug -> "DEBUG"
     Info -> "INFO"
+    Notice -> "NOTICE"
     Warning -> "WARN"
     Error -> "ERROR"
+    Critical -> "CRIT"
+    Alert -> "ALERT"
+    Emergency -> "EMERG"
   }
 }
 
@@ -755,14 +859,26 @@ const ansi_yellow = "\u{001b}[33m"
 
 const ansi_blue = "\u{001b}[34m"
 
+const ansi_red = "\u{001b}[31m"
+
 const ansi_red_bold = "\u{001b}[1;31m"
+
+const ansi_cyan = "\u{001b}[36m"
+
+const ansi_magenta = "\u{001b}[35m"
+
+const ansi_magenta_bold = "\u{001b}[1;35m"
 
 fn level_color(level: Level) -> String {
   case level {
     Debug -> ansi_dim
     Info -> ansi_blue
+    Notice -> ansi_cyan
     Warning -> ansi_yellow
-    Error -> ansi_red_bold
+    Error -> ansi_red
+    Critical -> ansi_red_bold
+    Alert -> ansi_magenta
+    Emergency -> ansi_magenta_bold
   }
 }
 
