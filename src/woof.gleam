@@ -115,6 +115,15 @@ pub fn set_level(level: Level) -> Nil {
   write_state(State(..state, level: level))
 }
 
+/// Check if a specific log level is currently enabled.
+///
+/// Useful if you need to perform expensive work before emitting several
+/// log messages, and want to skip that work if the level is silenced.
+pub fn is_enabled(level: Level) -> Bool {
+  let state = read_state()
+  should_log(level, state.level)
+}
+
 /// Set the output format.
 pub fn set_format(format: Format) -> Nil {
   let state = read_state()
@@ -129,11 +138,67 @@ pub fn set_sink(sink: Sink) -> Nil {
   write_state(State(..state, sink: sink))
 }
 
-/// The default sink that prints formatted logs to standard output.
-/// Useful if you are building a custom sink but still want to print
-/// to the console.
+/// The default sink — prints the formatted log line to standard output.
+///
+/// This is the out-of-the-box behaviour: zero configuration, beautiful
+/// output on any terminal.  Useful when building a custom sink that still
+/// wants to write to stdout.
+///
+/// See `beam_logger_sink` for the OTP-integrated alternative.
 pub fn default_sink(_entry: Entry, formatted: String) -> Nil {
   io.println(formatted)
+}
+
+/// A sink that routes log events through the official logging pipeline.
+///
+/// On the **BEAM target** each event is delivered to OTP's `logger` module
+/// (available since OTP 21), so the entire BEAM ecosystem can observe,
+/// filter, and re-route woof messages:
+///
+/// - Applications that use woof no longer need a second logging system.
+/// - Libraries that depend on woof can be silenced by the host application.
+/// - BEAM logger handlers (Loki, Datadog, etc.) receive woof events.
+/// - OTP performance features apply: async dispatch, load-shedding, etc.
+///
+/// Each event is tagged with `domain => [woof]` so handlers and filters
+/// can target woof output specifically:
+///
+/// ```erlang
+/// %% Silence all woof output in a specific environment:
+/// logger:add_primary_filter(no_woof,
+///     {fun logger_filters:domain/2, {stop, sub, [woof]}}).
+/// ```
+///
+/// On the **JavaScript target** the event is passed to the level-appropriate
+/// `console` method (`console.debug`, `console.info`, `console.warn`, or
+/// `console.error`) — the JS equivalent of routing by severity.
+///
+/// ## Usage
+///
+/// Call once at application startup, before any logging:
+///
+/// ```gleam
+/// pub fn main() {
+///   woof.set_sink(woof.beam_logger_sink)
+///   // ... rest of startup
+/// }
+/// ```
+pub fn beam_logger_sink(entry: Entry, formatted: String) -> Nil {
+  ffi_beam_log(
+    entry.level,
+    entry.message,
+    entry.fields,
+    entry.namespace,
+    formatted,
+  )
+}
+
+/// A sink that does nothing and discards all log events.
+///
+/// Useful for muting logs entirely, for example during test runs:
+/// `woof.set_sink(woof.silent_sink)`
+pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
+  Nil
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +334,18 @@ pub fn with_context(fields: List(#(String, String)), body: fn() -> a) -> a {
 pub fn set_global_context(fields: List(#(String, String))) -> Nil {
   let state = read_state()
   write_state(State(..state, global_context: fields))
+}
+
+/// Get the current global context fields.
+pub fn get_global_context() -> List(#(String, String)) {
+  let state = read_state()
+  state.global_context
+}
+
+/// Append fields to the global context without replacing the existing ones.
+pub fn append_global_context(fields: List(#(String, String))) -> Nil {
+  let current = get_global_context()
+  set_global_context(list.append(current, fields))
 }
 
 // ---------------------------------------------------------------------------
@@ -724,3 +801,13 @@ fn ffi_is_tty() -> Bool
 @external(erlang, "woof_ffi", "get_env")
 @external(javascript, "./woof_ffi.mjs", "get_env")
 fn ffi_get_env(name: String) -> Result(String, Nil)
+
+@external(erlang, "woof_ffi", "beam_log")
+@external(javascript, "./woof_ffi.mjs", "beam_log")
+fn ffi_beam_log(
+  level: Level,
+  message: String,
+  fields: List(#(String, String)),
+  namespace: Option(String),
+  formatted: String,
+) -> Nil

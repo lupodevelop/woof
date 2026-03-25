@@ -3,15 +3,57 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.1.0] - 2026-03-07
+## [1.2.0] - 2026-03-22
+
 ### Added
-- Introduced `Sink` type and `set_sink/1` function allowing clients to provide custom side-effect handlers (e.g. write to file, send over network).
-- Public `default_sink/2` function exposed so custom sinks can delegate to the original console printer.
-- Updated internal state to carry the configured sink; defaults continue to behave exactly as before.
+
+- **`silent_sink/2`** — a builtin sink that completely discards log events, useful for muting logs during test runs.
+- **`is_enabled/1`** — check if a specific log level is currently enabled, useful for bypassing expensive work.
+- **`get_global_context/0`** and **`append_global_context/1`** — retrieve or incrementally build the global context.
+- **`beam_logger_sink/2`** — a new public sink for production OTP
+  applications. When set via `woof.set_sink(woof.beam_logger_sink)`, every
+  log event is delivered to OTP's `logger` module (available since OTP 21)
+  instead of being printed directly to stdout. This means:
+  - Applications that use woof no longer need to manage two independent
+    logging systems — woof feeds into the same BEAM logger pipeline as
+    everything else.
+  - Libraries that depend on woof can be silenced or redirected by the host
+    application without any changes to the library itself.
+  - Other OTP/Elixir components (including Elixir's `Logger`) can observe,
+    filter, and re-route woof messages via standard BEAM logger
+    configuration.
+  - OTP performance features apply: async dispatch, load-shedding, handler
+    routing.
+  - Each event carries `domain => [woof]` and `fields` metadata so handlers
+    and primary filters can target woof events specifically.
+  - On the **JavaScript target**, `beam_logger_sink` routes each event to
+    the level-appropriate `console` method (`console.debug`, `console.info`,
+    `console.warn`, `console.error`) while preserving woof's own formatting.
 
 ### Notes
-- Change is fully backwards-compatible; existing code compiled against 1.0.3 or earlier will function without modification.
-- This enhancement paves the way for external adapters that implement advanced features such as log rotation, batching, or remote ingestion.
+
+- The default behaviour is **unchanged**: `default_sink` still prints the
+  formatted log line directly to stdout via `io.println`. Existing code
+  compiled against v1.1.0 or earlier works without modification.
+- `beam_logger_sink` is opt-in. Add one line to your application startup to
+  enable it: `woof.set_sink(woof.beam_logger_sink)`.
+- All other public API (`set_level`, `set_format`, `set_colors`,
+  `with_context`, `set_global_context`, pipeline helpers, etc.) is
+  unaffected.
+- OTP 21 or newer is required for `logger:log/4`; the existing OTP 22+
+  minimum already satisfies this.
+
+## [1.1.0] - 2026-03-07
+
+### Added
+
+- Introduced `Sink` type and `set_sink/1` function allowing clients to
+  provide custom side-effect handlers (e.g. write to file, send over
+  network).
+- Public `default_sink/2` function exposed so custom sinks can delegate to
+  the original console printer.
+- Updated internal state to carry the configured sink; defaults continue to
+  behave exactly as before. Fully backwards-compatible with v1.0.x.
 
 ## [1.0.3] - 2026-03-07
 ### Fixed
@@ -58,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Comprehensive test suite (34 tests) and detailed documentation in README and
   project reference.
 
+[1.2.0]: https://hex.pm/packages/woof/1.2.0
+[1.1.0]: https://hex.pm/packages/woof/1.1.0
+[1.0.3]: https://hex.pm/packages/woof/1.0.3
 [1.0.2]: https://hex.pm/packages/woof/1.0.2
 [1.0.1]: https://hex.pm/packages/woof/1.0.1
 [1.0.0]: https://hex.pm/packages/woof/1.0.0
