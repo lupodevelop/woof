@@ -2,6 +2,7 @@
 -export([get_state/1, set_state/1, get_context/1, set_context/1,
          now/0, monotonic_now/0, is_tty/0, get_env/1,
          beam_log/5,
+         push_test_event/1, pop_all_test_events/0, clear_test_events/0,
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
          test_event_fields/1, test_event_namespace/1,
@@ -84,6 +85,32 @@ get_env(Name) ->
         false -> {error, nil};
         Value -> {ok, list_to_binary(Value)}
     end.
+
+%% ── test_sink() event capture ──────────────────────────────────────────────
+%% Uses the process dictionary so each test process gets isolated storage.
+%% push_test_event/1  — appends one LogEvent to the capture list.
+%% pop_all_test_events/0 — returns the full list and clears it.
+%% clear_test_events/0   — clears without returning.
+
+push_test_event(Event) ->
+    Current = case erlang:get(woof_event_capture) of
+        undefined -> [];
+        List      -> List
+    end,
+    erlang:put(woof_event_capture, lists:append(Current, [Event])),
+    nil.
+
+pop_all_test_events() ->
+    Events = case erlang:get(woof_event_capture) of
+        undefined -> [];
+        List      -> List
+    end,
+    erlang:put(woof_event_capture, []),
+    Events.
+
+clear_test_events() ->
+    erlang:put(woof_event_capture, []),
+    nil.
 
 %% ── Test utilities for beam_logger_sink ────────────────────────────────────
 %% Called only from the test suite to verify that beam_logger_sink routes
