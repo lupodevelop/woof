@@ -6,7 +6,7 @@
 // push/pop stays balanced as long as callbacks are synchronous
 // (which they are in Gleam).
 
-import { Ok, Error } from "./gleam.mjs";
+import { Ok, Error, toList, prepend } from "./gleam.mjs";
 
 let state = undefined;
 let context = undefined;
@@ -72,6 +72,25 @@ export function beam_log(level, _message, _fields, _namespace, formatted) {
   } else {
     console.log(formatted);
   }
+}
+
+// test_sink() event capture — module-level array (JS is single-threaded).
+let _test_events = [];
+
+export function push_test_event(event) {
+  _test_events.push(event);
+  return undefined;
+}
+
+export function pop_all_test_events() {
+  const captured = toList(_test_events);
+  _test_events = [];
+  return captured;
+}
+
+export function clear_test_events() {
+  _test_events = [];
+  return undefined;
 }
 
 export function get_env(name) {
