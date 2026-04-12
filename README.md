@@ -61,7 +61,7 @@ woof.info("Payment processed", [
 ])
 ```
 
-## Testing — capture typed events
+## Testing capture typed events
 
 ```gleam
 let #(sink, get) = woof.test_sink()
@@ -79,7 +79,7 @@ event.fields  |> should.equal([
 ])
 ```
 
-## Production — one line
+## Production one line
 
 ```gleam
 pub fn main() {
@@ -101,7 +101,7 @@ pub fn main() {
 
 - Gleam **1.14** or newer
 - OTP **22+** on the BEAM (CI uses OTP 28)
-- `gleam_stdlib` — the only dependency
+- `gleam_stdlib` the only dependency
 
 ---
 
