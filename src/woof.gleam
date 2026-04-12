@@ -1,6 +1,5 @@
-import gleam/bool
-import gleam/float
-import gleam/int
+import gleam/float as gleam_float
+import gleam/int as gleam_int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -10,6 +9,33 @@ import gleam/string
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/// A typed log field value.
+///
+/// Use the helper constructors (`woof.str`, `woof.int`, `woof.float`,
+/// `woof.bool`) to build values rather than constructing these directly.
+/// The type is public so that sinks and tests can pattern-match on it.
+pub type FieldValue {
+  FString(String)
+  FInt(Int)
+  FFloat(Float)
+  FBool(Bool)
+}
+
+/// A fully typed log event, delivered to every registered `EventSink`.
+///
+/// Unlike `Entry`, fields here carry their original Gleam types — no
+/// information is lost before the sink decides how to format or route
+/// the event.  Use `test_sink` to capture `LogEvent`s in tests.
+pub type LogEvent {
+  LogEvent(
+    level: Level,
+    message: String,
+    fields: List(#(String, FieldValue)),
+    timestamp: String,
+    namespace: Option(String),
+  )
+}
 
 /// Log severity levels, ordered from least to most severe.
 ///
@@ -39,10 +65,19 @@ pub type Format {
   Custom(formatter: fn(Entry) -> String)
 }
 
-/// A Sink is responsible for side-effects (e.g. printing or sending the log).
-/// It receives the raw Entry and the final formatted String.
+/// A legacy sink receives both the resolved `Entry` and the pre-formatted
+/// string produced by the active `Format`.  Field values are serialised to
+/// strings before this point, so the types are not available here.
+///
+/// For full type fidelity use an `EventSink` via `set_event_sink`.
 pub type Sink =
   fn(Entry, String) -> Nil
+
+/// A typed sink receives a `LogEvent` with the original `FieldValue` types
+/// intact.  Register one with `set_event_sink`.  Use `test_sink` to build a
+/// capture sink for assertions in tests.
+pub type EventSink =
+  fn(LogEvent) -> Nil
 
 /// Controls whether ANSI colors are used in `Text` output.
 pub type ColorMode {
@@ -63,6 +98,7 @@ pub type Config {
 
 /// A fully resolved log entry, ready to be formatted.
 ///
+/// Field values have been serialised to strings at this point.
 /// This type is public so that `Custom` formatters can pattern-match on it
 /// and arrange the data however they like.
 pub type Entry {
@@ -130,12 +166,32 @@ pub fn set_format(format: Format) -> Nil {
   write_state(State(..state, format: format))
 }
 
-/// Set the sink function used to emit formatted logs.
+/// Set the legacy sink function used to emit formatted logs.
 ///
-/// The default sink uses `io.println` to write to standard output.
+/// The legacy sink receives an `Entry` (with string-serialised fields) and
+/// the pre-formatted string.  If you need the original `FieldValue` types
+/// use `set_event_sink` instead.  Both sinks can be active at the same time.
 pub fn set_sink(sink: Sink) -> Nil {
   let state = read_state()
   write_state(State(..state, sink: sink))
+}
+
+/// Register a typed event sink.
+///
+/// The sink receives a `LogEvent` with fields as `FieldValue` — types are
+/// preserved through the entire pipeline.  The legacy `Sink` (if any) is
+/// called independently; both are active simultaneously.
+///
+/// Use `test_sink` to get a capture sink for tests.
+pub fn set_event_sink(sink: EventSink) -> Nil {
+  let state = read_state()
+  write_state(State(..state, event_sink: Some(sink)))
+}
+
+/// Remove the registered event sink.
+pub fn clear_event_sink() -> Nil {
+  let state = read_state()
+  write_state(State(..state, event_sink: None))
 }
 
 /// The default sink — prints the formatted log line to standard output.
@@ -149,7 +205,7 @@ pub fn default_sink(_entry: Entry, formatted: String) -> Nil {
   io.println(formatted)
 }
 
-/// A sink that routes log events through the official logging pipeline.
+/// A sink that routes log events through the official OTP logging pipeline.
 ///
 /// On the **BEAM target** each event is delivered to OTP's `logger` module
 /// (available since OTP 21), so the entire BEAM ecosystem can observe,
@@ -201,27 +257,51 @@ pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
   Nil
 }
 
+/// Build a capture sink for use in tests.
+///
+/// Returns a pair of `#(sink, get)`:
+/// - `sink` is an `EventSink` to register with `set_event_sink`.
+/// - `get` reads and clears the captured `LogEvent` list.
+///
+/// ```gleam
+/// let #(sink, get) = woof.test_sink()
+/// woof.set_event_sink(sink)
+///
+/// woof.error("boom", [woof.int("code", 500)])
+///
+/// let assert [event] = get()
+/// event.level   |> should.equal(woof.Error)
+/// event.message |> should.equal("boom")
+/// event.fields  |> should.equal([#("code", woof.FInt(500))])
+/// ```
+pub fn test_sink() -> #(EventSink, fn() -> List(LogEvent)) {
+  ffi_clear_test_events()
+  let sink = fn(event: LogEvent) -> Nil { ffi_push_test_event(event) }
+  let get = fn() -> List(LogEvent) { ffi_pop_all_test_events() }
+  #(sink, get)
+}
+
 // ---------------------------------------------------------------------------
-// Logging — plain aka (no namespace)
+// Logging — plain (no namespace)
 // ---------------------------------------------------------------------------
 
 /// Log at Debug level.
-pub fn debug(message: String, fields: List(#(String, String))) -> Nil {
+pub fn debug(message: String, fields: List(#(String, FieldValue))) -> Nil {
   emit(Debug, message, fields, None)
 }
 
 /// Log at Info level.
-pub fn info(message: String, fields: List(#(String, String))) -> Nil {
+pub fn info(message: String, fields: List(#(String, FieldValue))) -> Nil {
   emit(Info, message, fields, None)
 }
 
 /// Log at Warning level.
-pub fn warning(message: String, fields: List(#(String, String))) -> Nil {
+pub fn warning(message: String, fields: List(#(String, FieldValue))) -> Nil {
   emit(Warning, message, fields, None)
 }
 
 /// Log at Error level.
-pub fn error(message: String, fields: List(#(String, String))) -> Nil {
+pub fn error(message: String, fields: List(#(String, FieldValue))) -> Nil {
   emit(Error, message, fields, None)
 }
 
@@ -232,25 +312,34 @@ pub fn error(message: String, fields: List(#(String, String))) -> Nil {
 /// Log at Debug level, evaluating the message only if Debug is enabled.
 ///
 /// Use this when building the message string is expensive.
-pub fn debug_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
+pub fn debug_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
   emit_lazy(Debug, build, fields, None)
 }
 
 /// Log at Info level, evaluating the message only if Info is enabled.
-pub fn info_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
+pub fn info_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
   emit_lazy(Info, build, fields, None)
 }
 
 /// Log at Warning level, evaluating the message only if Warning is enabled.
 pub fn warning_lazy(
   build: fn() -> String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> Nil {
   emit_lazy(Warning, build, fields, None)
 }
 
 /// Log at Error level, evaluating the message only if Error is enabled.
-pub fn error_lazy(build: fn() -> String, fields: List(#(String, String))) -> Nil {
+pub fn error_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
   emit_lazy(Error, build, fields, None)
 }
 
@@ -271,34 +360,83 @@ pub fn log(
   logger: Logger,
   level: Level,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> Nil {
   emit(level, message, fields, Some(logger.namespace))
 }
 
 // ---------------------------------------------------------------------------
-// Field helpers — automatic type conversion
+// Field constructors — typed (v1.3)
 // ---------------------------------------------------------------------------
 
-/// Create a string field. Same as writing `#(key, value)` directly, but
-/// reads nicely alongside the typed helpers.
-pub fn field(key: String, value: String) -> #(String, String) {
-  #(key, value)
+/// Create a string field.
+///
+/// ```gleam
+/// woof.info("user login", [woof.str("method", "oauth")])
+/// ```
+pub fn str(key: String, value: String) -> #(String, FieldValue) {
+  #(key, FString(value))
+}
+
+/// Create an integer field.  The value is preserved as `FInt` through the
+/// entire pipeline and only serialised to a string by the legacy sink.
+///
+/// ```gleam
+/// woof.info("request", [woof.int("status", 200)])
+/// ```
+pub fn int(key: String, value: Int) -> #(String, FieldValue) {
+  #(key, FInt(value))
+}
+
+/// Create a float field.
+///
+/// ```gleam
+/// woof.info("timing", [woof.float("ms", 12.4)])
+/// ```
+pub fn float(key: String, value: Float) -> #(String, FieldValue) {
+  #(key, FFloat(value))
+}
+
+/// Create a boolean field.  Renders as `"true"` / `"false"` (lowercase) in
+/// the legacy string path.
+///
+/// ```gleam
+/// woof.info("auth", [woof.bool("cached", True)])
+/// ```
+pub fn bool(key: String, value: Bool) -> #(String, FieldValue) {
+  #(key, FBool(value))
+}
+
+// ---------------------------------------------------------------------------
+// Legacy field helpers
+// ---------------------------------------------------------------------------
+
+/// Create a string field.
+///
+/// Prefer `woof.str` — this alias is kept for backwards compatibility.
+pub fn field(key: String, value: String) -> #(String, FieldValue) {
+  str(key, value)
 }
 
 /// Create a field from an `Int`.
-pub fn int_field(key: String, value: Int) -> #(String, String) {
-  #(key, int.to_string(value))
+///
+/// Prefer `woof.int` — this alias is kept for backwards compatibility.
+pub fn int_field(key: String, value: Int) -> #(String, FieldValue) {
+  int(key, value)
 }
 
 /// Create a field from a `Float`.
-pub fn float_field(key: String, value: Float) -> #(String, String) {
-  #(key, float.to_string(value))
+///
+/// Prefer `woof.float` — this alias is kept for backwards compatibility.
+pub fn float_field(key: String, value: Float) -> #(String, FieldValue) {
+  float(key, value)
 }
 
 /// Create a field from a `Bool`.
-pub fn bool_field(key: String, value: Bool) -> #(String, String) {
-  #(key, bool.to_string(value))
+///
+/// Prefer `woof.bool` — this alias is kept for backwards compatibility.
+pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
+  bool(key, value)
 }
 
 // ---------------------------------------------------------------------------
@@ -316,34 +454,34 @@ pub fn bool_field(key: String, value: Bool) -> #(String, String) {
 /// concurrent request handlers never interfere with each other.
 ///
 /// **Notice for JavaScript async users**: On the JavaScript target, because
-/// JS uses cooperative concurrency and is single-threaded, `with_context` 
+/// JS uses cooperative concurrency and is single-threaded, `with_context`
 /// modifies a global state. If your callback enters an async sleep/promise,
-/// the context might be overwritten by other concurrent tasks. Use with 
+/// the context might be overwritten by other concurrent tasks. Use with
 /// caution in highly concurrent async Node/Deno servers.
-pub fn with_context(fields: List(#(String, String)), body: fn() -> a) -> a {
+pub fn with_context(fields: List(#(String, FieldValue)), body: fn() -> a) -> a {
   let previous = ffi_get_context([])
   ffi_set_context(list.append(previous, fields))
-  let result = body()
+  let value = body()
   ffi_set_context(previous)
-  result
+  value
 }
 
 /// Set fields that appear on **every** log message globally.
 ///
 /// Typically called once at application start.
-pub fn set_global_context(fields: List(#(String, String))) -> Nil {
+pub fn set_global_context(fields: List(#(String, FieldValue))) -> Nil {
   let state = read_state()
   write_state(State(..state, global_context: fields))
 }
 
 /// Get the current global context fields.
-pub fn get_global_context() -> List(#(String, String)) {
+pub fn get_global_context() -> List(#(String, FieldValue)) {
   let state = read_state()
   state.global_context
 }
 
 /// Append fields to the global context without replacing the existing ones.
-pub fn append_global_context(fields: List(#(String, String))) -> Nil {
+pub fn append_global_context(fields: List(#(String, FieldValue))) -> Nil {
   let current = get_global_context()
   set_global_context(list.append(current, fields))
 }
@@ -354,7 +492,11 @@ pub fn append_global_context(fields: List(#(String, String))) -> Nil {
 
 /// Log the value at Info level and pass it through.  Fits naturally in
 /// pipelines.
-pub fn tap_info(value: a, message: String, fields: List(#(String, String))) -> a {
+pub fn tap_info(
+  value: a,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> a {
   info(message, fields)
   value
 }
@@ -363,7 +505,7 @@ pub fn tap_info(value: a, message: String, fields: List(#(String, String))) -> a
 pub fn tap_debug(
   value: a,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> a {
   debug(message, fields)
   value
@@ -373,7 +515,7 @@ pub fn tap_debug(
 pub fn tap_warning(
   value: a,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> a {
   warning(message, fields)
   value
@@ -383,7 +525,7 @@ pub fn tap_warning(
 pub fn tap_error(
   value: a,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> a {
   error(message, fields)
   value
@@ -398,7 +540,7 @@ pub fn tap_error(
 pub fn log_error(
   res: Result(a, b),
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
 ) -> Result(a, b) {
   case result.is_ok(res) {
     True -> res
@@ -418,22 +560,20 @@ pub fn log_error(
 /// Returns whatever `body` returns — the timing log is a side effect.
 pub fn time(label: String, body: fn() -> a) -> a {
   let start = ffi_monotonic_now()
-  let result = body()
+  let value = body()
   let elapsed = ffi_monotonic_now() - start
-  info(label <> " completed", [
-    #("duration_ms", int.to_string(elapsed)),
-  ])
-  result
+  info(label <> " completed", [str("duration_ms", gleam_int.to_string(elapsed))])
+  value
 }
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
-/// Format an entry without emitting it.
+/// Format an `Entry` without emitting it.
 ///
-/// Handy for testing, previews, or sending formatted output to a custom
-/// sink (file, HTTP, etc.).
+/// Handy for testing formatter output or building custom sink wrappers.
+/// Directly constructs `Entry` values with string fields for full control.
 pub fn format(entry: Entry, output_format: Format) -> String {
   format_entry(entry, output_format, Never)
 }
@@ -459,8 +599,9 @@ type State {
     level: Level,
     format: Format,
     colors: ColorMode,
-    global_context: List(#(String, String)),
+    global_context: List(#(String, FieldValue)),
     sink: Sink,
+    event_sink: Option(EventSink),
   )
 }
 
@@ -471,6 +612,7 @@ fn default_state() -> State {
     colors: Auto,
     global_context: [],
     sink: default_sink,
+    event_sink: None,
   )
 }
 
@@ -483,13 +625,39 @@ fn write_state(state: State) -> Nil {
 }
 
 // ---------------------------------------------------------------------------
+// Internals — field serialisation
+// ---------------------------------------------------------------------------
+
+fn field_value_to_string(fv: FieldValue) -> String {
+  case fv {
+    FString(s) -> s
+    FInt(n) -> gleam_int.to_string(n)
+    FFloat(f) -> gleam_float.to_string(f)
+    FBool(b) ->
+      case b {
+        True -> "true"
+        False -> "false"
+      }
+  }
+}
+
+fn fields_to_strings(
+  fields: List(#(String, FieldValue)),
+) -> List(#(String, String)) {
+  list.map(fields, fn(pair) {
+    let #(k, fv) = pair
+    #(k, field_value_to_string(fv))
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Internals — emit
 // ---------------------------------------------------------------------------
 
 fn emit(
   level: Level,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
   namespace: Option(String),
 ) -> Nil {
   let state = read_state()
@@ -502,7 +670,7 @@ fn emit(
 fn emit_lazy(
   level: Level,
   build: fn() -> String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
   namespace: Option(String),
 ) -> Nil {
   let state = read_state()
@@ -516,21 +684,41 @@ fn do_emit(
   state: State,
   level: Level,
   message: String,
-  fields: List(#(String, String)),
+  fields: List(#(String, FieldValue)),
   namespace: Option(String),
 ) -> Nil {
   let ctx = ffi_get_context([])
   let all_fields = list.flatten([state.global_context, ctx, fields])
+  let timestamp = ffi_now()
+
+  // ── Legacy sink path — serialise FieldValue → String ──────────────────
+  let string_fields = fields_to_strings(all_fields)
   let entry =
     Entry(
       level: level,
       message: message,
-      fields: all_fields,
+      fields: string_fields,
       namespace: namespace,
-      timestamp: ffi_now(),
+      timestamp: timestamp,
     )
   let formatted = format_entry(entry, state.format, state.colors)
   state.sink(entry, formatted)
+
+  // ── Typed event sink path — preserve FieldValue ───────────────────────
+  case state.event_sink {
+    None -> Nil
+    Some(event_sink_fn) -> {
+      let log_event =
+        LogEvent(
+          level: level,
+          message: message,
+          fields: all_fields,
+          timestamp: timestamp,
+          namespace: namespace,
+        )
+      event_sink_fn(log_event)
+    }
+  }
 }
 
 fn should_log(msg_level: Level, min_level: Level) -> Bool {
@@ -563,7 +751,6 @@ fn format_entry(
   }
 }
 
-/// Decide whether to actually use colors given the mode.
 fn resolve_colors(mode: ColorMode) -> Bool {
   case mode {
     Always -> True
@@ -780,11 +967,13 @@ fn ffi_set_state(state: State) -> Nil
 
 @external(erlang, "woof_ffi", "get_context")
 @external(javascript, "./woof_ffi.mjs", "get_context")
-fn ffi_get_context(default: List(#(String, String))) -> List(#(String, String))
+fn ffi_get_context(
+  default: List(#(String, FieldValue)),
+) -> List(#(String, FieldValue))
 
 @external(erlang, "woof_ffi", "set_context")
 @external(javascript, "./woof_ffi.mjs", "set_context")
-fn ffi_set_context(ctx: List(#(String, String))) -> Nil
+fn ffi_set_context(ctx: List(#(String, FieldValue))) -> Nil
 
 @external(erlang, "woof_ffi", "now")
 @external(javascript, "./woof_ffi.mjs", "now")
@@ -811,3 +1000,15 @@ fn ffi_beam_log(
   namespace: Option(String),
   formatted: String,
 ) -> Nil
+
+@external(erlang, "woof_ffi", "push_test_event")
+@external(javascript, "./woof_ffi.mjs", "push_test_event")
+fn ffi_push_test_event(event: LogEvent) -> Nil
+
+@external(erlang, "woof_ffi", "pop_all_test_events")
+@external(javascript, "./woof_ffi.mjs", "pop_all_test_events")
+fn ffi_pop_all_test_events() -> List(LogEvent)
+
+@external(erlang, "woof_ffi", "clear_test_events")
+@external(javascript, "./woof_ffi.mjs", "clear_test_events")
+fn ffi_clear_test_events() -> Nil
