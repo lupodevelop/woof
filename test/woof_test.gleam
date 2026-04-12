@@ -1133,4 +1133,3 @@ pub fn append_global_context_adds_to_existing_test() {
   |> should.equal([woof.str("app", "test"), woof.str("env", "ci")])
   reset()
 }
-
