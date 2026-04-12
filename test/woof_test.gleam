@@ -1,5 +1,6 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/io
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleeunit
@@ -22,6 +23,7 @@ fn reset() {
   ))
   woof.set_global_context([])
   woof.set_sink(woof.default_sink)
+  woof.clear_event_sink()
 }
 
 // ---------------------------------------------------------------------------
@@ -233,17 +235,10 @@ pub fn level_name_test() {
 pub fn level_filtering_drops_below_minimum_test() {
   reset()
 
-  // Use a custom formatter that records calls via assertion.
-  // If debug or info were emitted, the formatter would run and we'd see it.
-  // We set level to Warning, so only warning + error should fire.
   let call_count = fn(entry: woof.Entry) -> String {
-    // This should only be called for warning and error.
     case entry.level {
       woof.Warning | woof.Error -> ""
-      _ -> {
-        // If we get here, a below-level message leaked through.
-        panic as "Unexpected log emission below minimum level"
-      }
+      _ -> panic as "Unexpected log emission below minimum level"
     }
   }
 
@@ -317,8 +312,8 @@ pub fn with_context_adds_fields_test() {
     colors: woof.Never,
   ))
 
-  woof.with_context([#("request_id", "abc")], fn() {
-    woof.info("test", [#("inline", "123")])
+  woof.with_context([woof.str("request_id", "abc")], fn() {
+    woof.info("test", [woof.str("inline", "123")])
   })
 
   reset()
@@ -337,9 +332,9 @@ pub fn nested_context_accumulates_test() {
     colors: woof.Never,
   ))
 
-  woof.with_context([#("outer", "1")], fn() {
-    woof.with_context([#("inner", "2")], fn() {
-      woof.info("nested", [#("field", "3")])
+  woof.with_context([woof.str("outer", "1")], fn() {
+    woof.with_context([woof.str("inner", "2")], fn() {
+      woof.info("nested", [woof.str("field", "3")])
     })
   })
 
@@ -349,7 +344,6 @@ pub fn nested_context_accumulates_test() {
 pub fn context_restored_after_callback_test() {
   reset()
 
-  // First: log inside with_context — should have the ctx field.
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Custom(fn(entry) {
@@ -363,9 +357,10 @@ pub fn context_restored_after_callback_test() {
     colors: woof.Never,
   ))
 
-  woof.with_context([#("temp", "value")], fn() { woof.info("inside", []) })
+  woof.with_context([woof.str("temp", "value")], fn() {
+    woof.info("inside", [])
+  })
 
-  // After the callback returns, context should be empty again.
   woof.info("outside", [])
 
   reset()
@@ -378,7 +373,7 @@ pub fn context_restored_after_callback_test() {
 pub fn global_context_included_in_every_message_test() {
   reset()
 
-  woof.set_global_context([#("app", "test-suite")])
+  woof.set_global_context([woof.str("app", "test-suite")])
 
   woof.configure(woof.Config(
     level: woof.Debug,
@@ -390,7 +385,7 @@ pub fn global_context_included_in_every_message_test() {
     colors: woof.Never,
   ))
 
-  woof.info("msg", [#("key", "val")])
+  woof.info("msg", [woof.str("key", "val")])
 
   reset()
 }
@@ -398,7 +393,7 @@ pub fn global_context_included_in_every_message_test() {
 pub fn global_and_scoped_context_merge_test() {
   reset()
 
-  woof.set_global_context([#("app", "svc")])
+  woof.set_global_context([woof.str("app", "svc")])
 
   woof.configure(woof.Config(
     level: woof.Debug,
@@ -410,8 +405,8 @@ pub fn global_and_scoped_context_merge_test() {
     colors: woof.Never,
   ))
 
-  woof.with_context([#("req", "1")], fn() {
-    woof.info("merged", [#("inline", "x")])
+  woof.with_context([woof.str("req", "1")], fn() {
+    woof.info("merged", [woof.str("inline", "x")])
   })
 
   reset()
@@ -489,7 +484,6 @@ pub fn lazy_skips_evaluation_when_level_disabled_test() {
   reset()
   woof.set_level(woof.Error)
 
-  // If the thunk ran, it would panic — proving that lazy skips evaluation.
   woof.debug_lazy(fn() { panic as "debug_lazy thunk should not run" }, [])
   woof.info_lazy(fn() { panic as "info_lazy thunk should not run" }, [])
   woof.warning_lazy(fn() { panic as "warning_lazy thunk should not run" }, [])
@@ -521,7 +515,6 @@ pub fn lazy_evaluates_when_level_enabled_test() {
 pub fn tap_info_passes_value_through_test() {
   reset()
 
-  // Use Custom to swallow output so we don't pollute test stdout.
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Custom(fn(_) { "" }),
@@ -607,7 +600,6 @@ pub fn time_returns_body_result_test() {
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Custom(fn(entry) {
-      // Should contain the label and a duration_ms field.
       entry.message
       |> string.starts_with("work completed")
       |> should.be_true
@@ -625,30 +617,94 @@ pub fn time_returns_body_result_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Field helpers
+// Field constructors — typed (v1.3)
 // ---------------------------------------------------------------------------
 
-pub fn field_helper_string_test() {
+pub fn field_str_test() {
+  woof.str("key", "value")
+  |> should.equal(#("key", woof.FString("value")))
+}
+
+pub fn field_int_test() {
+  woof.int("status", 200)
+  |> should.equal(#("status", woof.FInt(200)))
+}
+
+pub fn field_float_test() {
+  woof.float("ratio", 3.14)
+  |> should.equal(#("ratio", woof.FFloat(3.14)))
+}
+
+pub fn field_bool_test() {
+  woof.bool("active", True)
+  |> should.equal(#("active", woof.FBool(True)))
+
+  woof.bool("active", False)
+  |> should.equal(#("active", woof.FBool(False)))
+}
+
+// ---------------------------------------------------------------------------
+// Field constructors — string rendering in Entry (legacy sink path)
+// ---------------------------------------------------------------------------
+
+pub fn typed_fields_render_to_strings_in_entry_test() {
+  reset()
+
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Custom(fn(entry) {
+      // Entry.fields always carries plain strings — FieldValue is
+      // serialised before Entry is built, so legacy sinks/formatters
+      // never see the raw types.
+      entry.fields
+      |> should.equal([
+        #("label", "hello"),
+        #("count", "42"),
+        #("ratio", "3.14"),
+        #("ok", "true"),
+        #("ko", "false"),
+      ])
+      ""
+    }),
+    colors: woof.Never,
+  ))
+
+  woof.info("typed", [
+    woof.str("label", "hello"),
+    woof.int("count", 42),
+    woof.float("ratio", 3.14),
+    woof.bool("ok", True),
+    woof.bool("ko", False),
+  ])
+
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// Legacy field helpers — still work, return FieldValue now
+// ---------------------------------------------------------------------------
+
+pub fn legacy_field_helper_string_test() {
   woof.field("key", "value")
-  |> should.equal(#("key", "value"))
+  |> should.equal(#("key", woof.FString("value")))
 }
 
-pub fn field_helper_int_test() {
+pub fn legacy_field_helper_int_test() {
   woof.int_field("status", 200)
-  |> should.equal(#("status", "200"))
+  |> should.equal(#("status", woof.FInt(200)))
 }
 
-pub fn field_helper_float_test() {
+pub fn legacy_field_helper_float_test() {
   woof.float_field("duration", 12.5)
-  |> should.equal(#("duration", "12.5"))
+  |> should.equal(#("duration", woof.FFloat(12.5)))
 }
 
-pub fn field_helper_bool_test() {
+pub fn legacy_field_helper_bool_test() {
   woof.bool_field("cached", True)
-  |> should.equal(#("cached", "True"))
+  |> should.equal(#("cached", woof.FBool(True)))
 
   woof.bool_field("cached", False)
-  |> should.equal(#("cached", "False"))
+  |> should.equal(#("cached", woof.FBool(False)))
 }
 
 pub fn field_helpers_in_log_call_test() {
@@ -657,12 +713,14 @@ pub fn field_helpers_in_log_call_test() {
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Custom(fn(entry) {
+      // In Entry, every FieldValue is serialised to a string.
+      // FBool renders lowercase ("true"/"false") — consistent with JSON.
       entry.fields
       |> should.equal([
         #("path", "/api"),
         #("status", "200"),
         #("ms", "12.5"),
-        #("cached", "True"),
+        #("cached", "true"),
       ])
       ""
     }),
@@ -670,17 +728,17 @@ pub fn field_helpers_in_log_call_test() {
   ))
 
   woof.info("Request", [
-    woof.field("path", "/api"),
-    woof.int_field("status", 200),
-    woof.float_field("ms", 12.5),
-    woof.bool_field("cached", True),
+    woof.str("path", "/api"),
+    woof.int("status", 200),
+    woof.float("ms", 12.5),
+    woof.bool("cached", True),
   ])
 
   reset()
 }
 
 // ---------------------------------------------------------------------------
-// Sinks
+// Sinks — legacy (Entry + formatted string)
 // ---------------------------------------------------------------------------
 
 pub fn sink_receives_entry_and_formatted_string_test() {
@@ -699,7 +757,7 @@ pub fn sink_receives_entry_and_formatted_string_test() {
     formatted |> string.contains("disk full") |> should.be_true
   })
 
-  woof.warning("disk full", [#("path", "/var")])
+  woof.warning("disk full", [woof.str("path", "/var")])
   reset()
 }
 
@@ -744,21 +802,22 @@ pub fn sink_receives_merged_context_fields_test() {
     format: woof.Text,
     colors: woof.Never,
   ))
-  woof.set_global_context([#("app", "test")])
+  woof.set_global_context([woof.str("app", "test")])
 
   woof.set_sink(fn(entry, _formatted) {
-    // global + scoped + inline, in order
+    // global + scoped + inline, serialised to strings in Entry
     entry.fields
     |> should.equal([#("app", "test"), #("req", "r1"), #("k", "v")])
   })
 
-  woof.with_context([#("req", "r1")], fn() { woof.info("msg", [#("k", "v")]) })
+  woof.with_context([woof.str("req", "r1")], fn() {
+    woof.info("msg", [woof.str("k", "v")])
+  })
   reset()
 }
 
 pub fn default_sink_can_be_restored_test() {
   reset()
-  // Swap out sink then put default back — no panic on emission.
   woof.set_sink(fn(_entry, _formatted) { Nil })
   woof.set_sink(woof.default_sink)
   reset()
@@ -766,13 +825,11 @@ pub fn default_sink_can_be_restored_test() {
 
 pub fn beam_logger_sink_does_not_crash_test() {
   reset()
-  // beam_logger_sink routes through OTP logger.  Output may appear above
-  // this test block in the terminal (OTP logger format) — that is expected.
   woof.set_sink(woof.beam_logger_sink)
-  woof.debug("beam debug", [woof.field("sink", "beam")])
-  woof.info("beam info", [woof.field("sink", "beam")])
-  woof.warning("beam warning", [woof.field("sink", "beam")])
-  woof.error("beam error", [woof.field("sink", "beam")])
+  woof.debug("beam debug", [woof.str("sink", "beam")])
+  woof.info("beam info", [woof.str("sink", "beam")])
+  woof.warning("beam warning", [woof.str("sink", "beam")])
+  woof.error("beam error", [woof.str("sink", "beam")])
   reset()
 }
 
@@ -782,9 +839,162 @@ pub fn beam_logger_sink_works_with_namespace_and_fields_test() {
   let log = woof.new("db")
   log
   |> woof.log(woof.Info, "query ok", [
-    woof.int_field("ms", 12),
-    woof.field("table", "orders"),
+    woof.int("ms", 12),
+    woof.str("table", "orders"),
   ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// EventSink — typed LogEvent path (v1.3)
+// ---------------------------------------------------------------------------
+
+pub fn event_sink_receives_log_event_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.info("hello world", [woof.str("key", "value")])
+
+  let events = get()
+  events |> list.length |> should.equal(1)
+  let assert [event] = events
+  event.level |> should.equal(woof.Info)
+  event.message |> should.equal("hello world")
+  event.fields |> should.equal([#("key", woof.FString("value"))])
+
+  reset()
+}
+
+pub fn event_sink_captures_typed_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.info("typed fields", [
+    woof.str("s", "text"),
+    woof.int("n", 42),
+    woof.float("f", 1.5),
+    woof.bool("b", True),
+  ])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("s", woof.FString("text")),
+    #("n", woof.FInt(42)),
+    #("f", woof.FFloat(1.5)),
+    #("b", woof.FBool(True)),
+  ])
+
+  reset()
+}
+
+pub fn event_sink_get_clears_the_buffer_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.info("first", [])
+  get() |> list.length |> should.equal(1)
+  get() |> list.length |> should.equal(0)
+
+  reset()
+}
+
+pub fn event_sink_respects_level_filter_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.set_level(woof.Error)
+
+  woof.debug("ignored", [])
+  woof.info("ignored", [])
+  woof.warning("ignored", [])
+  woof.error("captured", [])
+
+  let events = get()
+  events |> list.length |> should.equal(1)
+  let assert [event] = events
+  event.level |> should.equal(woof.Error)
+  event.message |> should.equal("captured")
+
+  reset()
+}
+
+pub fn event_sink_includes_context_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.set_global_context([woof.str("app", "test")])
+
+  woof.with_context([woof.int("req", 1)], fn() {
+    woof.info("msg", [woof.bool("ok", True)])
+  })
+
+  let assert [event] = get()
+  // Full typed field list: global + scoped + inline
+  event.fields
+  |> should.equal([
+    #("app", woof.FString("test")),
+    #("req", woof.FInt(1)),
+    #("ok", woof.FBool(True)),
+  ])
+
+  reset()
+}
+
+pub fn event_sink_captures_namespace_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let logger = woof.new("api")
+  logger |> woof.log(woof.Warning, "slow request", [woof.int("ms", 1200)])
+
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("api"))
+  event.level |> should.equal(woof.Warning)
+  event.fields |> should.equal([#("ms", woof.FInt(1200))])
+
+  reset()
+}
+
+pub fn event_sink_and_legacy_sink_both_fire_test() {
+  reset()
+
+  // Both sinks should receive the event.
+  let legacy_fired = fn(entry: woof.Entry, _: String) {
+    entry.message |> should.equal("dual")
+  }
+  woof.set_sink(legacy_fired)
+
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.info("dual", [])
+
+  get() |> list.length |> should.equal(1)
+
+  reset()
+}
+
+pub fn event_sink_captures_multiple_events_in_order_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.debug("first", [])
+  woof.info("second", [])
+  woof.error("third", [])
+
+  let events = get()
+  events |> list.length |> should.equal(3)
+  let assert [e1, e2, e3] = events
+  e1.message |> should.equal("first")
+  e2.message |> should.equal("second")
+  e3.message |> should.equal("third")
+
   reset()
 }
 
@@ -831,7 +1041,7 @@ pub fn beam_logger_sink_calls_logger_log_test() {
   install_test_handler()
   woof.set_sink(woof.beam_logger_sink)
 
-  woof.info("otp logger test", [woof.field("key", "val")])
+  woof.info("otp logger test", [woof.str("key", "val")])
 
   let assert Ok(event) = pop_test_event()
   test_event_level(event) |> should.equal("info")
@@ -850,7 +1060,7 @@ pub fn beam_logger_sink_metadata_includes_namespace_test() {
   woof.set_sink(woof.beam_logger_sink)
 
   let log = woof.new("srv")
-  log |> woof.log(woof.Warning, "ns test", [woof.field("x", "1")])
+  log |> woof.log(woof.Warning, "ns test", [woof.str("x", "1")])
 
   let assert Ok(event) = pop_test_event()
   test_event_level(event) |> should.equal("warning")
@@ -917,11 +1127,11 @@ pub fn silent_sink_discards_output_test() {
 
 pub fn append_global_context_adds_to_existing_test() {
   reset()
-  woof.set_global_context([#("app", "test")])
-  woof.append_global_context([#("env", "ci")])
+  woof.set_global_context([woof.str("app", "test")])
+  woof.append_global_context([woof.str("env", "ci")])
 
   woof.get_global_context()
-  |> should.equal([#("app", "test"), #("env", "ci")])
+  |> should.equal([woof.str("app", "test"), woof.str("env", "ci")])
   reset()
 }
 
@@ -930,10 +1140,6 @@ pub fn append_global_context_adds_to_existing_test() {
 // ---------------------------------------------------------------------------
 
 pub fn visual_demo_test() {
-  // This test prints real log output so you can see what woof looks like.
-  // It's a normal test — it always passes — but the side effect is visible
-  // in the terminal when you run `gleam test`.
-
   let separator = fn(title: String) {
     io.println("")
     io.println("━━━ " <> title <> " ━━━")
@@ -949,19 +1155,19 @@ pub fn visual_demo_test() {
     colors: woof.Always,
   ))
 
-  woof.debug("Cache lookup", [#("key", "user:42")])
+  woof.debug("Cache lookup", [woof.str("key", "user:42")])
   woof.info("Server started", [
-    woof.field("host", "0.0.0.0"),
-    woof.int_field("port", 3000),
+    woof.str("host", "0.0.0.0"),
+    woof.int("port", 3000),
   ])
   woof.warning("Rate limit approaching", [
-    woof.field("endpoint", "/api/search"),
-    woof.int_field("current", 89),
-    woof.int_field("limit", 100),
+    woof.str("endpoint", "/api/search"),
+    woof.int("current", 89),
+    woof.int("limit", 100),
   ])
   woof.error("Connection lost", [
-    woof.field("host", "db-primary"),
-    woof.float_field("retry_in_s", 2.5),
+    woof.str("host", "db-primary"),
+    woof.float("retry_in_s", 2.5),
   ])
 
   // ── Text format without colors ───────────────────────────────────────
@@ -969,8 +1175,8 @@ pub fn visual_demo_test() {
 
   woof.set_colors(woof.Never)
 
-  woof.info("Plain text output", [#("format", "text")])
-  woof.error("Something went wrong", [#("code", "ERR_TIMEOUT")])
+  woof.info("Plain text output", [woof.str("format", "text")])
+  woof.error("Something went wrong", [woof.str("code", "ERR_TIMEOUT")])
 
   // ── JSON format ──────────────────────────────────────────────────────
   separator("JSON format")
@@ -978,12 +1184,12 @@ pub fn visual_demo_test() {
   woof.set_format(woof.Json)
 
   woof.info("User signed in", [
-    woof.field("user_id", "u_abc123"),
-    woof.field("method", "oauth"),
+    woof.str("user_id", "u_abc123"),
+    woof.str("method", "oauth"),
   ])
   woof.error("Payment failed", [
-    woof.field("order_id", "ORD-42"),
-    woof.int_field("amount", 4999),
+    woof.str("order_id", "ORD-42"),
+    woof.int("amount", 4999),
   ])
 
   // ── Compact format ───────────────────────────────────────────────────
@@ -992,14 +1198,14 @@ pub fn visual_demo_test() {
   woof.set_format(woof.Compact)
 
   woof.info("Request handled", [
-    woof.field("method", "GET"),
-    woof.field("path", "/api/users"),
-    woof.int_field("status", 200),
-    woof.float_field("ms", 12.4),
+    woof.str("method", "GET"),
+    woof.str("path", "/api/users"),
+    woof.int("status", 200),
+    woof.float("ms", 12.4),
   ])
   woof.warning("Slow query", [
-    woof.field("table", "orders"),
-    woof.int_field("ms", 3200),
+    woof.str("table", "orders"),
+    woof.int("ms", 3200),
   ])
 
   // ── Namespaced logger ────────────────────────────────────────────────
@@ -1014,21 +1220,20 @@ pub fn visual_demo_test() {
   let db = woof.new("database")
   let http = woof.new("http")
 
-  db |> woof.log(woof.Info, "Connected", [#("host", "localhost")])
-  db |> woof.log(woof.Debug, "Query executed", [woof.int_field("ms", 45)])
-  http |> woof.log(woof.Info, "Listening", [woof.int_field("port", 8080)])
-  http
-  |> woof.log(woof.Warning, "Slow response", [woof.int_field("ms", 1200)])
+  db |> woof.log(woof.Info, "Connected", [woof.str("host", "localhost")])
+  db |> woof.log(woof.Debug, "Query executed", [woof.int("ms", 45)])
+  http |> woof.log(woof.Info, "Listening", [woof.int("port", 8080)])
+  http |> woof.log(woof.Warning, "Slow response", [woof.int("ms", 1200)])
 
   // ── Context ──────────────────────────────────────────────────────────
   separator("Scoped + global context")
 
-  woof.set_global_context([woof.field("app", "woof-demo")])
+  woof.set_global_context([woof.str("app", "woof-demo")])
 
-  woof.with_context([woof.field("request_id", "req-7f3a")], fn() {
-    woof.info("Processing payment", [woof.int_field("amount", 42)])
-    woof.with_context([woof.field("step", "validation")], fn() {
-      woof.debug("Validating card", [woof.field("type", "visa")])
+  woof.with_context([woof.str("request_id", "req-7f3a")], fn() {
+    woof.info("Processing payment", [woof.int("amount", 42)])
+    woof.with_context([woof.str("step", "validation")], fn() {
+      woof.debug("Validating card", [woof.str("type", "visa")])
     })
   })
 
@@ -1058,6 +1263,5 @@ pub fn visual_demo_test() {
   io.println("━━━ End of visual demo ━━━")
   io.println("")
 
-  // Clean up
   reset()
 }
