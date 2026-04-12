@@ -28,6 +28,7 @@ fn reset() -> Nil {
     colors: woof.Auto,
   ))
   woof.set_global_context([])
+  woof.clear_event_sink()
 }
 
 // ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ fn reset() -> Nil {
 pub fn main() -> Nil {
   io.println("")
   io.println("╔══════════════════════════════════════════════════════╗")
-  io.println("║          w o o f   —   dev demo (v1.2.0)             ║")
+  io.println("║          w o o f   —   dev demo (v1.3.0)             ║")
   io.println("╚══════════════════════════════════════════════════════╝")
 
   demo_basic_levels()
@@ -59,6 +60,7 @@ pub fn main() -> Nil {
   demo_format_utility()
   demo_level_name()
   demo_sinks()
+  demo_test_sink()
 
   io.println("")
   io.println("═══════════════════════════════════════════════════════")
@@ -76,16 +78,19 @@ fn demo_basic_levels() -> Nil {
   sep("1 · Basic levels")
   note("debug / info / warning / error → Text format, colors Auto")
 
-  woof.debug("Cache lookup", [#("key", "user:42")])
-  woof.info("Server started", [#("host", "0.0.0.0"), #("port", "3000")])
+  woof.debug("Cache lookup", [woof.str("key", "user:42")])
+  woof.info("Server started", [
+    woof.str("host", "0.0.0.0"),
+    woof.int("port", 3000),
+  ])
   woof.warning("Rate limit approaching", [
-    #("endpoint", "/api/search"),
-    #("current", "89"),
-    #("limit", "100"),
+    woof.str("endpoint", "/api/search"),
+    woof.int("current", 89),
+    woof.int("limit", 100),
   ])
   woof.error("Connection lost", [
-    #("host", "db-primary"),
-    #("retry_in_s", "2.5"),
+    woof.str("host", "db-primary"),
+    woof.float("retry_in_s", 2.5),
   ])
 }
 
@@ -96,17 +101,22 @@ fn demo_basic_levels() -> Nil {
 fn demo_field_helpers() -> Nil {
   reset()
   sep("2 · Field helpers")
-  note("field / int_field / float_field / bool_field")
+  note("str / int / float / bool — typed constructors (v1.3)")
 
   woof.info("Order processed", [
+    woof.str("order_id", "ORD-9912"),
+    woof.int("amount_cents", 4999),
+    woof.float("tax_rate", 22.0),
+    woof.bool("express", True),
+  ])
+
+  note("Legacy helpers (field/int_field/float_field/bool_field) still work")
+  woof.info("Legacy helpers", [
     woof.field("order_id", "ORD-9912"),
     woof.int_field("amount_cents", 4999),
     woof.float_field("tax_rate", 22.0),
     woof.bool_field("express", True),
   ])
-
-  note("Plain #(String, String) tuples also work, helpers are convenience only")
-  woof.info("Raw tuple", [#("key", "value")])
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +131,7 @@ fn demo_level_filtering() -> Nil {
   woof.set_level(woof.Warning)
   woof.debug("not printed", [])
   woof.info("not printed either", [])
-  woof.warning("this IS printed", [#("reason", "at or above Warning")])
+  woof.warning("this IS printed", [woof.str("reason", "at or above Warning")])
   woof.error("this IS printed too", [])
 
   note("restore Debug (default) for subsequent sections")
@@ -139,12 +149,12 @@ fn demo_format_text() -> Nil {
 
   woof.set_format(woof.Text)
   woof.info("User signed in", [
-    woof.field("user_id", "u_7f3a"),
-    woof.field("method", "oauth"),
+    woof.str("user_id", "u_7f3a"),
+    woof.str("method", "oauth"),
   ])
   woof.error("Disk almost full", [
-    woof.int_field("used_gb", 490),
-    woof.int_field("total_gb", 512),
+    woof.int("used_gb", 490),
+    woof.int("total_gb", 512),
   ])
 }
 
@@ -159,24 +169,24 @@ fn demo_format_compact() -> Nil {
 
   woof.set_format(woof.Compact)
   woof.info("Request handled", [
-    woof.field("method", "GET"),
-    woof.field("path", "/api/users"),
-    woof.int_field("status", 200),
-    woof.float_field("ms", 12.4),
+    woof.str("method", "GET"),
+    woof.str("path", "/api/users"),
+    woof.int("status", 200),
+    woof.float("ms", 12.4),
   ])
   woof.warning("Slow query detected", [
-    woof.field("table", "orders"),
-    woof.int_field("ms", 3200),
+    woof.str("table", "orders"),
+    woof.int("ms", 3200),
   ])
 
   note("Values containing spaces get quoted automatically")
   woof.info("User logged in", [
-    woof.field("name", "John Doe"),
-    woof.field("role", "admin user"),
+    woof.str("name", "John Doe"),
+    woof.str("role", "admin user"),
   ])
 
   note("Empty values get quoted too")
-  woof.debug("Probe", [woof.field("optional_tag", "")])
+  woof.debug("Probe", [woof.str("optional_tag", "")])
 }
 
 // ---------------------------------------------------------------------------
@@ -190,19 +200,19 @@ fn demo_format_json() -> Nil {
 
   woof.set_format(woof.Json)
   woof.info("Payment processed", [
-    woof.field("order_id", "ORD-42"),
-    woof.int_field("amount", 4999),
-    woof.bool_field("express", False),
+    woof.str("order_id", "ORD-42"),
+    woof.int("amount", 4999),
+    woof.bool("express", False),
   ])
   woof.error("Payment failed", [
-    woof.field("order_id", "ORD-99"),
-    woof.field("reason", "Insufficient funds"),
+    woof.str("order_id", "ORD-99"),
+    woof.str("reason", "Insufficient funds"),
   ])
 
   note("Reserved keys (level/time/ns/msg) are prefixed '_' to avoid collision")
   woof.info("Collision-safe", [
-    woof.field("msg", "user override"),
-    woof.field("level", "custom"),
+    woof.str("msg", "user override"),
+    woof.str("level", "custom"),
   ])
 }
 
@@ -235,10 +245,10 @@ fn demo_format_custom() -> Nil {
     }),
   )
 
-  woof.debug("Inspecting value", [#("x", "42")])
+  woof.debug("Inspecting value", [woof.int("x", 42)])
   woof.info("All systems operational", [])
-  woof.warning("Response time elevated", [#("p99_ms", "850")])
-  woof.error("Database unreachable", [#("host", "pg-primary")])
+  woof.warning("Response time elevated", [woof.int("p99_ms", 850)])
+  woof.error("Database unreachable", [woof.str("host", "pg-primary")])
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +266,7 @@ fn demo_configure() -> Nil {
     colors: woof.Never,
   ))
   woof.debug("dropped — below Info", [])
-  woof.info("Compact, no-color, Info+", [#("via", "configure")])
+  woof.info("Compact, no-color, Info+", [woof.str("via", "configure")])
   woof.warning("Compact warning too", [])
 }
 
@@ -284,7 +294,7 @@ fn demo_colors() -> Nil {
     "Auto (default) → colors only when stdout is a TTY and NO_COLOR is unset",
   )
   woof.set_colors(woof.Auto)
-  woof.info("Auto color detection", [#("check", "is_tty()")])
+  woof.info("Auto color detection", [woof.str("check", "is_tty()")])
 }
 
 // ---------------------------------------------------------------------------
@@ -300,14 +310,14 @@ fn demo_namespaced_logger() -> Nil {
   let http = woof.new("http")
   let auth = woof.new("auth")
 
-  db |> woof.log(woof.Info, "Connected", [woof.field("host", "pg-primary")])
-  db |> woof.log(woof.Debug, "Query executed", [woof.int_field("ms", 45)])
+  db |> woof.log(woof.Info, "Connected", [woof.str("host", "pg-primary")])
+  db |> woof.log(woof.Debug, "Query executed", [woof.int("ms", 45)])
 
-  http |> woof.log(woof.Info, "Listening", [woof.int_field("port", 8080)])
-  http |> woof.log(woof.Warning, "Slow response", [woof.int_field("ms", 1200)])
+  http |> woof.log(woof.Info, "Listening", [woof.int("port", 8080)])
+  http |> woof.log(woof.Warning, "Slow response", [woof.int("ms", 1200)])
 
-  auth |> woof.log(woof.Info, "Token validated", [woof.field("alg", "RS256")])
-  auth |> woof.log(woof.Error, "Token expired", [woof.field("user_id", "u_99")])
+  auth |> woof.log(woof.Info, "Token validated", [woof.str("alg", "RS256")])
+  auth |> woof.log(woof.Error, "Token expired", [woof.str("user_id", "u_99")])
 }
 
 // ---------------------------------------------------------------------------
@@ -325,10 +335,10 @@ fn demo_lazy_logging() -> Nil {
 
   note("info_lazy, warning_lazy, error_lazy DO execute since Info is enabled")
   woof.info_lazy(fn() { "Lazy info: " <> "computed only now" }, [
-    #("src", "info_lazy"),
+    woof.str("src", "info_lazy"),
   ])
-  woof.warning_lazy(fn() { "Lazy warning" }, [#("src", "warning_lazy")])
-  woof.error_lazy(fn() { "Lazy error" }, [#("src", "error_lazy")])
+  woof.warning_lazy(fn() { "Lazy warning" }, [woof.str("src", "warning_lazy")])
+  woof.error_lazy(fn() { "Lazy error" }, [woof.str("src", "error_lazy")])
 
   woof.set_level(woof.Debug)
 }
@@ -343,19 +353,19 @@ fn demo_global_context() -> Nil {
   note("Fields set here appear on EVERY subsequent log message")
 
   woof.set_global_context([
-    woof.field("app", "woof-demo"),
-    woof.field("version", "1.0.2"),
-    woof.field("environment", "dev"),
+    woof.str("app", "woof-demo"),
+    woof.str("version", "1.3.0"),
+    woof.str("environment", "dev"),
   ])
 
   woof.info("Application boot complete", [])
-  woof.debug("Running health checks", [#("check", "db")])
+  woof.debug("Running health checks", [woof.str("check", "db")])
   woof.warning("Config file not found, using defaults", [])
 
   note("Overwrite global context")
   woof.set_global_context([
-    woof.field("app", "woof-demo"),
-    woof.field("region", "eu-west-1"),
+    woof.str("app", "woof-demo"),
+    woof.str("region", "eu-west-1"),
   ])
   woof.info("Context replaced", [])
 
@@ -372,17 +382,16 @@ fn demo_scoped_context() -> Nil {
   sep("13 · Scoped context — with_context")
   note("Fields scoped to the callback; previous context is restored after")
 
-  woof.set_global_context([woof.field("app", "woof-demo")])
+  woof.set_global_context([woof.str("app", "woof-demo")])
 
-  use <- woof.with_context([woof.field("request_id", "req-7f3a")])
+  use <- woof.with_context([woof.str("request_id", "req-7f3a")])
   woof.info("Handling request", [])
 
-  use <- woof.with_context([woof.field("step", "validation")])
-  woof.debug("Validating payload", [woof.field("schema", "order_v2")])
+  use <- woof.with_context([woof.str("step", "validation")])
+  woof.debug("Validating payload", [woof.str("schema", "order_v2")])
 
   woof.info("Validation passed", [])
-  // After inner with_context closes, step disappears but request_id remains
-  woof.info("Sending response", [woof.int_field("status", 200)])
+  woof.info("Sending response", [woof.int("status", 200)])
 
   note("Outside both contexts — only global 'app' field remains")
   woof.set_global_context([])
@@ -401,11 +410,11 @@ fn demo_pipeline_tap() -> Nil {
 
   let _processed =
     ids
-    |> woof.tap_debug("Processing ID list", [woof.int_field("count", 5)])
+    |> woof.tap_debug("Processing ID list", [woof.int("count", 5)])
     |> list.filter(fn(x) { x > 2 })
-    |> woof.tap_info("After filter", [woof.int_field("remaining", 3)])
+    |> woof.tap_info("After filter", [woof.int("remaining", 3)])
     |> list.map(fn(x) { x * 10 })
-    |> woof.tap_warning("Values amplified", [woof.field("note", "×10")])
+    |> woof.tap_warning("Values amplified", [woof.str("note", "×10")])
 
   let ok_r: Result(Int, String) = Ok(42)
   let _ = ok_r |> woof.tap_error("This won't print (Ok)", [])
@@ -435,7 +444,7 @@ fn demo_log_error() -> Nil {
   |> fn(v) { woof.info("Ok path result: " <> v, []) }
 
   err_val
-  |> woof.log_error("Fetch failed", [#("resource", "/users/99")])
+  |> woof.log_error("Fetch failed", [woof.str("resource", "/users/99")])
   |> result.unwrap("default")
   |> fn(v) { woof.info("Error path fell back to: " <> v, []) }
 }
@@ -451,15 +460,11 @@ fn demo_time() -> Nil {
 
   let _rows =
     woof.time("database query", fn() {
-      // Simulate a query — in real code this would call database.query(...)
-      [#("id", "1"), #("id", "2"), #("id", "3")]
+      // Simulate a query
+      ["row-1", "row-2", "row-3"]
     })
 
-  let _response =
-    woof.time("http request", fn() {
-      // Simulate sending a request
-      Ok("200 OK")
-    })
+  let _response = woof.time("http request", fn() { Ok("200 OK") })
 
   note("time also works as a use expression")
   use <- woof.time("inline block")
@@ -467,19 +472,23 @@ fn demo_time() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 17. woof.format/2 utility  — format without emitting
+// 17. woof.format/2 utility — format without emitting
 // ---------------------------------------------------------------------------
 
 fn demo_format_utility() -> Nil {
   reset()
   sep("17 · format/2 — format an Entry without emitting it")
-  note("Handy for testing, preview, or routing to a custom sink (file, HTTP…)")
+  note(
+    "Entry takes pre-serialised string fields — useful for custom formatters",
+  )
 
+  // Entry.fields is List(#(String, String)) — plain strings, always.
+  // Use string values directly when constructing Entry for format testing.
   let entry =
     woof.Entry(
       level: woof.Warning,
       message: "Disk space low",
-      fields: [woof.int_field("free_gb", 10), woof.int_field("total_gb", 512)],
+      fields: [#("free_gb", "10"), #("total_gb", "512")],
       namespace: None,
       timestamp: "2026-03-03T15:00:00.000Z",
     )
@@ -491,59 +500,6 @@ fn demo_format_utility() -> Nil {
   io.println("  text   → " <> text_line)
   io.println("  compact→ " <> compact_line)
   io.println("  json   → " <> json_line)
-}
-
-// ---------------------------------------------------------------------------
-// 19. Sinks — default_sink / beam_logger_sink / custom sinks
-// ---------------------------------------------------------------------------
-
-fn demo_sinks() -> Nil {
-  reset()
-  sep("19 · Sinks — default_sink / beam_logger_sink / custom")
-
-  note("default_sink → io.println (the default, output is what you see here)")
-  woof.set_sink(woof.default_sink)
-  woof.info("Using default_sink", [woof.field("target", "stdout")])
-  woof.debug("Still the same beautiful output", [])
-
-  note(
-    "beam_logger_sink → routes through OTP logger (output appears via BEAM handler, above this block)",
-  )
-  note("set_sink(beam_logger_sink) is the single line you add in production")
-  woof.set_sink(woof.beam_logger_sink)
-  woof.info("Routed through OTP logger", [
-    woof.field("domain", "[woof]"),
-    woof.field("handler", "default"),
-  ])
-  woof.warning("BEAM logger owns format and routing now", [])
-  woof.error("Apps can silence this with logger:add_primary_filter", [])
-
-  note(
-    "custom sink — receives both the structured Entry and the formatted string",
-  )
-  reset()
-  woof.set_format(woof.Json)
-  woof.set_sink(fn(entry, formatted) {
-    io.println(
-      "  level  → "
-      <> woof.level_name(entry.level)
-      <> " | msg → "
-      <> entry.message,
-    )
-    io.println("  fields → " <> string.inspect(entry.fields))
-    io.println("  fmt    → " <> formatted)
-    io.println("")
-  })
-  woof.info("Custom sink sees everything", [
-    woof.field("key", "value"),
-    woof.int_field("count", 3),
-  ])
-  woof.error("Error through custom sink", [woof.field("code", "ERR_42")])
-
-  note("restore default_sink for a clean finish")
-  reset()
-  woof.set_sink(woof.default_sink)
-  woof.info("Back to default_sink", [])
 }
 
 // ---------------------------------------------------------------------------
@@ -566,4 +522,94 @@ fn demo_level_name() -> Nil {
       <> "\"",
     )
   })
+}
+
+// ---------------------------------------------------------------------------
+// 19. Sinks — default_sink / beam_logger_sink / custom sinks
+// ---------------------------------------------------------------------------
+
+fn demo_sinks() -> Nil {
+  reset()
+  sep("19 · Sinks — default_sink / beam_logger_sink / custom")
+
+  note("default_sink → io.println (the default, output is what you see here)")
+  woof.set_sink(woof.default_sink)
+  woof.info("Using default_sink", [woof.str("target", "stdout")])
+  woof.debug("Still the same beautiful output", [])
+
+  note(
+    "beam_logger_sink → routes through OTP logger (output appears via BEAM handler)",
+  )
+  woof.set_sink(woof.beam_logger_sink)
+  woof.info("Routed through OTP logger", [
+    woof.str("domain", "[woof]"),
+    woof.str("handler", "default"),
+  ])
+  woof.warning("BEAM logger owns format and routing now", [])
+
+  note(
+    "custom sink — receives both the structured Entry and the formatted string",
+  )
+  reset()
+  woof.set_format(woof.Json)
+  woof.set_sink(fn(entry, formatted) {
+    io.println(
+      "  level  → "
+      <> woof.level_name(entry.level)
+      <> " | msg → "
+      <> entry.message,
+    )
+    io.println("  fields → " <> string.inspect(entry.fields))
+    io.println("  fmt    → " <> formatted)
+    io.println("")
+  })
+  woof.info("Custom sink sees everything", [
+    woof.str("key", "value"),
+    woof.int("count", 3),
+  ])
+  woof.error("Error through custom sink", [woof.str("code", "ERR_42")])
+
+  note("restore default_sink for a clean finish")
+  reset()
+  woof.set_sink(woof.default_sink)
+  woof.info("Back to default_sink", [])
+}
+
+// ---------------------------------------------------------------------------
+// 20. test_sink — capture LogEvents for inspection (v1.3)
+// ---------------------------------------------------------------------------
+
+fn demo_test_sink() -> Nil {
+  reset()
+  sep("20 · test_sink — capture typed LogEvents (v1.3)")
+  note("test_sink() returns a typed EventSink plus a get() function")
+  note("Fields keep their original types through the entire pipeline")
+
+  let #(sink, get) = woof.test_sink()
+  woof.set_sink(woof.silent_sink)
+  woof.set_event_sink(sink)
+
+  woof.info("User signed in", [
+    woof.str("user_id", "u_abc"),
+    woof.int("attempt", 1),
+    woof.bool("mfa", True),
+  ])
+  woof.error("Payment failed", [
+    woof.str("order_id", "ORD-42"),
+    woof.int("amount", 4999),
+  ])
+
+  let events = get()
+
+  list.each(events, fn(e) {
+    io.println(
+      "  captured → level=" <> woof.level_name(e.level) <> " msg=" <> e.message,
+    )
+    list.each(e.fields, fn(f) {
+      let #(k, v) = f
+      io.println("    " <> k <> ": " <> string.inspect(v))
+    })
+  })
+
+  reset()
 }
