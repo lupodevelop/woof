@@ -1,5 +1,4 @@
 import gleam/dynamic.{type Dynamic}
-import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -22,7 +21,7 @@ fn reset() {
     colors: woof.Never,
   ))
   woof.set_global_context([])
-  woof.set_sink(woof.default_sink)
+  woof.set_sink(woof.silent_sink)
   woof.clear_event_sink()
 }
 
@@ -1135,133 +1134,3 @@ pub fn append_global_context_adds_to_existing_test() {
   reset()
 }
 
-// ---------------------------------------------------------------------------
-// Visual demo — prints real output to the terminal
-// ---------------------------------------------------------------------------
-
-pub fn visual_demo_test() {
-  let separator = fn(title: String) {
-    io.println("")
-    io.println("━━━ " <> title <> " ━━━")
-    io.println("")
-  }
-
-  // ── Text format with colors ──────────────────────────────────────────
-  separator("Text format with ANSI colors")
-
-  woof.configure(woof.Config(
-    level: woof.Debug,
-    format: woof.Text,
-    colors: woof.Always,
-  ))
-
-  woof.debug("Cache lookup", [woof.str("key", "user:42")])
-  woof.info("Server started", [
-    woof.str("host", "0.0.0.0"),
-    woof.int("port", 3000),
-  ])
-  woof.warning("Rate limit approaching", [
-    woof.str("endpoint", "/api/search"),
-    woof.int("current", 89),
-    woof.int("limit", 100),
-  ])
-  woof.error("Connection lost", [
-    woof.str("host", "db-primary"),
-    woof.float("retry_in_s", 2.5),
-  ])
-
-  // ── Text format without colors ───────────────────────────────────────
-  separator("Text format (no colors)")
-
-  woof.set_colors(woof.Never)
-
-  woof.info("Plain text output", [woof.str("format", "text")])
-  woof.error("Something went wrong", [woof.str("code", "ERR_TIMEOUT")])
-
-  // ── JSON format ──────────────────────────────────────────────────────
-  separator("JSON format")
-
-  woof.set_format(woof.Json)
-
-  woof.info("User signed in", [
-    woof.str("user_id", "u_abc123"),
-    woof.str("method", "oauth"),
-  ])
-  woof.error("Payment failed", [
-    woof.str("order_id", "ORD-42"),
-    woof.int("amount", 4999),
-  ])
-
-  // ── Compact format ───────────────────────────────────────────────────
-  separator("Compact format")
-
-  woof.set_format(woof.Compact)
-
-  woof.info("Request handled", [
-    woof.str("method", "GET"),
-    woof.str("path", "/api/users"),
-    woof.int("status", 200),
-    woof.float("ms", 12.4),
-  ])
-  woof.warning("Slow query", [
-    woof.str("table", "orders"),
-    woof.int("ms", 3200),
-  ])
-
-  // ── Namespaced logger ────────────────────────────────────────────────
-  separator("Namespaced logger (Text + colors)")
-
-  woof.configure(woof.Config(
-    level: woof.Debug,
-    format: woof.Text,
-    colors: woof.Always,
-  ))
-
-  let db = woof.new("database")
-  let http = woof.new("http")
-
-  db |> woof.log(woof.Info, "Connected", [woof.str("host", "localhost")])
-  db |> woof.log(woof.Debug, "Query executed", [woof.int("ms", 45)])
-  http |> woof.log(woof.Info, "Listening", [woof.int("port", 8080)])
-  http |> woof.log(woof.Warning, "Slow response", [woof.int("ms", 1200)])
-
-  // ── Context ──────────────────────────────────────────────────────────
-  separator("Scoped + global context")
-
-  woof.set_global_context([woof.str("app", "woof-demo")])
-
-  woof.with_context([woof.str("request_id", "req-7f3a")], fn() {
-    woof.info("Processing payment", [woof.int("amount", 42)])
-    woof.with_context([woof.str("step", "validation")], fn() {
-      woof.debug("Validating card", [woof.str("type", "visa")])
-    })
-  })
-
-  woof.set_global_context([])
-
-  // ── Custom formatter ─────────────────────────────────────────────────
-  separator("Custom formatter")
-
-  let emoji_format = fn(entry: woof.Entry) -> String {
-    let icon = case entry.level {
-      woof.Debug -> "🔍"
-      woof.Info -> "✅"
-      woof.Warning -> "⚠️"
-      woof.Error -> "❌"
-    }
-    icon <> " " <> entry.message
-  }
-
-  woof.set_format(woof.Custom(emoji_format))
-
-  woof.debug("Looking around...", [])
-  woof.info("All good", [])
-  woof.warning("Heads up", [])
-  woof.error("Oops", [])
-
-  io.println("")
-  io.println("━━━ End of visual demo ━━━")
-  io.println("")
-
-  reset()
-}
