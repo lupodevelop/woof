@@ -1,4 +1,4 @@
-# woof — Guide
+# woof : Guide
 
 Full reference for the woof logging library.  
 For a quick overview and installation see the [README](../README.md).  
