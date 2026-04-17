@@ -256,11 +256,8 @@ pub fn level_filtering_drops_below_minimum_test() {
 
   let call_count = fn(entry: woof.Entry) -> String {
     case entry.level {
-      woof.Warning
-      | woof.Error
-      | woof.Critical
-      | woof.Alert
-      | woof.Emergency -> ""
+      woof.Warning | woof.Error | woof.Critical | woof.Alert | woof.Emergency ->
+        ""
       _ -> panic as "Unexpected log emission below minimum level"
     }
   }
@@ -1523,4 +1520,7 @@ pub fn beam_logger_sink_new_levels_reach_logger_test() {
 
 @target(erlang)
 @external(erlang, "woof_ffi", "test_event_get_int_field")
-fn test_event_get_int_field(event: Dynamic, field_name: String) -> Result(Int, Nil)
+fn test_event_get_int_field(
+  event: Dynamic,
+  field_name: String,
+) -> Result(Int, Nil)
