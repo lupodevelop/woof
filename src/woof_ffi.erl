@@ -1,15 +1,15 @@
 -module(woof_ffi).
 -export([get_state/1, set_state/1, get_context/1, set_context/1,
          now/0, monotonic_now/0, is_tty/0, get_env/1,
-         beam_log/5,
+         beam_log/5, beam_event_log/4,
          push_test_event/1, pop_all_test_events/0, clear_test_events/0,
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
-         test_event_fields/1, test_event_namespace/1,
+         test_event_fields/1, test_event_namespace/1, test_event_get_int_field/2,
          log/2]).
 
-%% woof FFI — Erlang target
-%% Global config — stored in persistent_term (erts, always available).
+%% woof FFI - Erlang target
+%% Global config - stored in persistent_term (erts, always available).
 %% Reads are essentially free; writes are rare.
 
 get_state(Default) ->
@@ -22,7 +22,7 @@ set_state(State) ->
     persistent_term:put(woof_state, State),
     nil.
 
-%% Scoped context — stored in the process dictionary so each BEAM
+%% Scoped context - stored in the process dictionary so each BEAM
 %% process (= each request handler in OTP) gets its own context.
 
 get_context(Default) ->
@@ -45,12 +45,12 @@ now() ->
         )
     ).
 
-%% Monotonic time in milliseconds — for measuring durations.
+%% Monotonic time in milliseconds - for measuring durations.
 
 monotonic_now() ->
     erlang:monotonic_time(millisecond).
 
-%% TTY detection — checks whether stdout is connected to a terminal.
+%% TTY detection - checks whether stdout is connected to a terminal.
 
 is_tty() ->
     case io:getopts(standard_io) of
@@ -64,8 +64,8 @@ is_tty() ->
     end.
 
 %% Route a log event through the OTP logger (OTP 21+).
-%% Used by woof:beam_logger_sink/2 — the opt-in production sink.
-%% Level is a Gleam atom (debug/info/warning/error) — matches OTP levels.
+%% Used by woof:beam_logger_sink/2 - the opt-in production sink.
+%% Level is a Gleam atom (debug/info/warning/error) - matches OTP levels.
 %% Fields are passed as logger metadata under the `fields` key.
 %% Namespace, when present, is included in metadata under `namespace`.
 %% The pre-formatted string is unused; BEAM logger handlers own the output.
@@ -78,6 +78,27 @@ beam_log(Level, Message, Fields, Namespace, _Formatted) ->
     end,
     logger:log(Level, "~ts", [Message], Meta).
 
+%% Route a typed LogEvent through OTP logger with structured metadata.
+%% Fields are converted from Gleam FieldValue tuples to native Erlang terms.
+%% FString → binary, FInt → integer, FFloat → float, FBool → boolean atom.
+
+beam_event_log(Level, Message, Fields, Namespace) ->
+    ErlFields = maps:from_list(
+        [{K, field_value_to_term(V)} || {K, V} <- Fields]
+    ),
+    Meta0 = #{domain => [woof], fields => ErlFields},
+    Meta = case Namespace of
+        none       -> Meta0;
+        {some, NS} -> Meta0#{namespace => NS}
+    end,
+    logger:log(Level, "~ts", [Message], Meta),
+    nil.
+
+field_value_to_term({f_string, S}) -> S;
+field_value_to_term({f_int,    N}) -> N;
+field_value_to_term({f_float,  F}) -> F;
+field_value_to_term({f_bool,   B}) -> B.
+
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 
 get_env(Name) ->
@@ -88,9 +109,9 @@ get_env(Name) ->
 
 %% ── test_sink() event capture ──────────────────────────────────────────────
 %% Uses the process dictionary so each test process gets isolated storage.
-%% push_test_event/1  — appends one LogEvent to the capture list.
-%% pop_all_test_events/0 — returns the full list and clears it.
-%% clear_test_events/0   — clears without returning.
+%% push_test_event/1  - appends one LogEvent to the capture list.
+%% pop_all_test_events/0 - returns the full list and clears it.
+%% clear_test_events/0   - clears without returning.
 
 push_test_event(Event) ->
     Current = case erlang:get(woof_event_capture) of
@@ -116,10 +137,10 @@ clear_test_events() ->
 %% Called only from the test suite to verify that beam_logger_sink routes
 %% events through OTP logger:log/4 with the correct metadata.
 %%
-%% install_test_handler/0 — adds this module as a logger handler and saves the
+%% install_test_handler/0 - adds this module as a logger handler and saves the
 %%   current primary level (restoring it on remove).
-%% remove_test_handler/0  — removes the handler and restores primary level.
-%% pop_test_event/0       — dequeues the earliest captured woof event; returns
+%% remove_test_handler/0  - removes the handler and restores primary level.
+%% pop_test_event/0       - dequeues the earliest captured woof event; returns
 %%   {ok, Event} or {error, nil} when the queue is empty.
 %% Accessor functions decode individual fields from a captured event map.
 
@@ -165,6 +186,16 @@ test_event_fields(Event) ->
 
 test_event_namespace(Event) ->
     maps:get(namespace, Event).
+
+%% Extract a specific field as an integer from a beam_event_sink event.
+%% Returns {ok, Int} if the field exists and is an integer, {error, nil} otherwise.
+test_event_get_int_field(Event, FieldName) ->
+    Fields = maps:get(fields, Event, #{}),
+    case maps:get(FieldName, Fields, undefined) of
+        undefined -> {error, nil};
+        V when is_integer(V) -> {ok, V};
+        _ -> {error, nil}
+    end.
 
 %% OTP logger handler callback.
 %% Only woof events (domain=[woof]) are captured; everything else is ignored.
