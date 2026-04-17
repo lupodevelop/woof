@@ -1,6 +1,6 @@
-> ⚠️ **v1.3 contains a breaking change.** The field list type changed from
-> `List(#(String, String))` to `List(#(String, FieldValue))`. The compiler
-> will guide you — migration takes minutes. See [docs/migration_v1_3.md](docs/migration_v1_3.md).
+> ℹ️ **v1.4** adds 4 new OTP levels (`Notice`, `Critical`, `Alert`, `Emergency`), `beam_event_sink`, multi-sink dispatch, and `dev()`/`prod()` presets. No breaking changes.
+>
+> ⚠️ **v1.3 breaking change:** fields changed from `List(#(String, String))` to `List(#(String, FieldValue))`. See [docs/migration_v1_3.md](docs/migration_v1_3.md).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/lupodevelop/woof/main/assets/img/woof-logo.png" alt="woof logo" width="200" />
@@ -14,7 +14,7 @@ A straightforward logging library for Gleam.
 Dedicated to Echo, my dog.
 
 woof gets out of your way: import it, call `info(...)`, and you're done.
-Structured fields, namespaces, scoped context, typed events — all there
+Structured fields, namespaces, scoped context, typed events - all there
 when you need them, invisible when you don't.
 
 ## Install
@@ -79,13 +79,21 @@ event.fields  |> should.equal([
 ])
 ```
 
-## Production one line
+## One-call setup
 
 ```gleam
 pub fn main() {
-  woof.set_sink(woof.beam_logger_sink) // routes through OTP logger
-  // ... rest of startup
+  woof.dev()   // Debug level, Text format, colors Auto, stdout
+  // - or -
+  woof.prod()  // Info level, Json format, OTP logger
 }
+```
+
+Or wire up sinks explicitly:
+
+```gleam
+woof.set_sinks([woof.beam_logger_sink, my_metrics_sink])
+woof.set_event_sink(woof.beam_event_sink) // structured typed fields to OTP
 ```
 
 ## Documentation
@@ -93,7 +101,7 @@ pub fn main() {
 | Document | Contents |
 | :--- | :--- |
 | [docs/guide.md](docs/guide.md) | Full reference: levels, formats, sinks, context, BEAM integration, API table |
-| [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 — what changed and how to fix it |
+| [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 - what changed and how to fix it |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [hexdocs.pm/woof](https://hexdocs.pm/woof/) | Generated module reference |
 
