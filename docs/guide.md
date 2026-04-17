@@ -78,7 +78,7 @@ woof.info("Payment processed", [
 
 ### FieldValue type
 
-`FieldValue` is a public type — pattern-match on it in event sinks and tests:
+`FieldValue` is a public type - pattern-match on it in event sinks and tests:
 
 ```gleam
 import woof.{FString, FInt, FFloat, FBool}
@@ -107,24 +107,42 @@ Their call sites are unchanged; they now return `#(String, FieldValue)` instead 
 
 ## Levels and filtering
 
-Four levels ordered by severity:
+Eight levels ordered by severity - matching the OTP / syslog scale:
 
 | Level | Tag | When to use |
 | :--- | :--- | :--- |
 | `Debug` | `[DEBUG]` | Detailed traces, only useful during development |
 | `Info` | `[INFO]` | Normal operational events |
+| `Notice` | `[NOTICE]` | Significant business events that are not errors |
 | `Warning` | `[WARN]` | Unexpected but recoverable situations |
 | `Error` | `[ERROR]` | Failures that need attention |
+| `Critical` | `[CRIT]` | System degradation, partial failure |
+| `Alert` | `[ALERT]` | Immediate human action required |
+| `Emergency` | `[EMERG]` | System is completely unusable |
 
-Set the minimum — messages below it are dropped before any allocation:
+Set the minimum - messages below it are dropped before any allocation:
 
 ```gleam
 woof.set_level(woof.Warning)
 
 woof.debug("ignored", [])    // dropped
 woof.info("ignored", [])     // dropped
+woof.notice("ignored", [])   // dropped (Notice = 2, Warning = 3)
 woof.warning("shown", [])    // emitted
 woof.error("shown", [])      // emitted
+woof.critical("shown", [])   // emitted
+```
+
+All eight levels have corresponding logging functions and lazy variants:
+
+```gleam
+woof.notice("Deployment complete", [woof.str("version", "1.4.0")])
+woof.critical("Database replica lag", [woof.int("lag_ms", 5000)])
+woof.alert("Disk almost full", [woof.int("free_gb", 1)])
+woof.emergency("Cannot write to disk", [])
+
+// lazy variants - thunk is only evaluated if the level is enabled
+woof.critical_lazy(fn() { expensive_diagnostic() }, [])
 ```
 
 Check programmatically:
@@ -247,7 +265,7 @@ do_work()
 woof.info("Done", [])               // still includes request_id
 ```
 
-Contexts nest — inner fields accumulate on top of outer ones:
+Contexts nest - inner fields accumulate on top of outer ones:
 
 ```gleam
 use <- woof.with_context([woof.str("service", "api")])
@@ -257,10 +275,10 @@ woof.info("Processing", [])
 // fields: service, request_id, plus any inline fields
 ```
 
-On the BEAM, `with_context` uses the process dictionary — concurrent request handlers
+On the BEAM, `with_context` uses the process dictionary - concurrent request handlers
 never interfere. Fields from all three sources merge in order: global → scoped → inline.
 
-> **JavaScript async users** — `with_context` uses a module-level variable on JS.
+> **JavaScript async users** - `with_context` uses a module-level variable on JS.
 > If your callback `await`s (returns a `Promise`), the context may be overwritten by
 > another concurrent request. For heavily concurrent async JS code, pass context
 > explicitly rather than using `with_context`.
@@ -297,10 +315,10 @@ let ctx = woof.get_global_context()
 A **sink** is a function that receives each log event and produces side-effects.
 woof has two sink channels, both can be active simultaneously.
 
-### Legacy sink — `fn(Entry, String) -> Nil`
+### Legacy sink - `fn(Entry, String) -> Nil`
 
 Receives the resolved `Entry` (fields as strings) and the pre-formatted string.
-This is the original sink type — all built-in sinks use it.
+This is the original sink type - all built-in sinks use it.
 
 ```gleam
 woof.set_sink(fn(_entry, formatted) {
@@ -316,20 +334,53 @@ Built-in legacy sinks:
 | `beam_logger_sink` | Routes through OTP `logger:log/4` on BEAM; `console.*` on JS |
 | `silent_sink` | Discards everything |
 
-### Event sink — `fn(LogEvent) -> Nil`
+### Multiple legacy sinks - `set_sinks(List(Sink))`
 
-Receives a `LogEvent` with fields as `FieldValue` — no type information is lost.
+Register several sinks at once; each receives every event in order:
+
+```gleam
+woof.set_sinks([woof.beam_logger_sink, my_datadog_sink, my_metrics_sink])
+```
+
+`set_sink(s)` is shorthand for `set_sinks([s])`.
+
+### Event sink - `fn(LogEvent) -> Nil`
+
+Receives a `LogEvent` with fields as `FieldValue` - no type information is lost.
 
 ```gleam
 woof.set_event_sink(fn(event: woof.LogEvent) {
   case event.level {
-    woof.Error -> alert_pagerduty(event.message, event.fields)
-    _          -> Nil
+    woof.Error | woof.Critical | woof.Alert | woof.Emergency ->
+      alert_pagerduty(event.message, event.fields)
+    _ -> Nil
   }
 })
 ```
 
-Both sinks fire independently on every emit. Remove with `clear_event_sink()`.
+Both channels (legacy + event) fire independently on every emit. Remove with
+`clear_event_sink()`.
+
+### `beam_event_sink` - structured OTP logging
+
+`beam_event_sink` is an `EventSink` that sends typed Erlang terms to OTP logger.
+Unlike `beam_logger_sink`, integer fields arrive as integers, booleans as booleans:
+
+```gleam
+woof.set_event_sink(woof.beam_event_sink)
+woof.info("Payment ok", [woof.int("amount", 4999), woof.bool("express", True)])
+```
+
+OTP logger receives: `#{fields => #{<<"amount">> => 4999, <<"express">> => true}}`.
+
+### Presets
+
+One-call configuration for common environments:
+
+```gleam
+woof.dev()   // Debug level, Text format, Auto colors, stdout
+woof.prod()  // Info level, Json format, no colors, beam_logger_sink
+```
 
 ### Extending built-in sinks
 
@@ -381,13 +432,14 @@ separate processes (which gleeunit/eunit does by default) are fully isolated.
 ## Lazy evaluation
 
 When building the message or fields is expensive, use the lazy variants.
-The thunk is only called if the level is currently enabled — zero allocation otherwise.
+The thunk is only called if the level is currently enabled - zero allocation otherwise.
 
 ```gleam
 woof.debug_lazy(fn() { "snapshot: " <> expensive_dump(state) }, [])
 ```
 
-Available: `debug_lazy`, `info_lazy`, `warning_lazy`, `error_lazy`.
+Available: `debug_lazy`, `info_lazy`, `notice_lazy`, `warning_lazy`, `error_lazy`,
+`critical_lazy`, `alert_lazy`, `emergency_lazy`.
 
 Equivalently, guard with `is_enabled`:
 
@@ -404,7 +456,7 @@ case woof.is_enabled(woof.Debug) {
 
 ### tap
 
-Log and pass a value through — fits naturally in `|>` chains:
+Log and pass a value through - fits naturally in `|>` chains:
 
 ```gleam
 fetch_user(id)
@@ -414,7 +466,8 @@ fetch_user(id)
 |> save_user()
 ```
 
-Available: `tap_debug`, `tap_info`, `tap_warning`, `tap_error`.
+Available: `tap_debug`, `tap_info`, `tap_notice`, `tap_warning`, `tap_error`,
+`tap_critical`, `tap_alert`, `tap_emergency`.
 
 ### log_error
 
@@ -476,8 +529,9 @@ Colors apply to `Text` format only.
 woof.set_colors(woof.Always)
 ```
 
-Level colors in `Text` format: Debug → dim grey, Info → blue, Warning → yellow,
-Error → bold red.
+Level colors in `Text` format: Debug → dim grey, Info → blue, Notice → cyan,
+Warning → yellow, Error → bold red, Critical → bold magenta, Alert → bold red,
+Emergency → bold red.
 
 ---
 
@@ -520,7 +574,7 @@ logger:add_primary_filter(no_woof,
 | Key | Value |
 | :--- | :--- |
 | `domain` | `[woof]` |
-| `fields` | `List(#(String, String))` — serialised field list |
+| `fields` | `List(#(String, String))` - serialised field list |
 | `namespace` | Logger namespace, if `woof.new/1` was used |
 
 ### Output format under beam_logger_sink
@@ -548,16 +602,18 @@ config :logger, :default_handler,
 
 ### JavaScript target
 
-`beam_logger_sink` on JS routes each event to the level-appropriate `console` method:
+`beam_logger_sink` and `beam_event_sink` on JS route each event to the
+level-appropriate `console` method:
 
 | woof level | console method |
 | :--- | :--- |
 | `Debug` | `console.debug` |
 | `Info` | `console.info` |
-| `Warning` | `console.warn` |
-| `Error` | `console.error` |
+| `Notice`, `Warning` | `console.warn` |
+| `Error`, `Critical`, `Alert`, `Emergency` | `console.error` |
 
-woof's own formatting (Text, Compact, JSON, Custom) is preserved on JS.
+woof's own formatting (Text, Compact, JSON, Custom) is preserved on JS for
+`beam_logger_sink`. `beam_event_sink` uses the raw message on JS (no formatter).
 
 ---
 
@@ -585,12 +641,20 @@ behave identically on both targets.
 | :--- | :--- | :--- |
 | `debug` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Debug |
 | `info` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Info |
+| `notice` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Notice |
 | `warning` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Warning |
 | `error` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Error |
+| `critical` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Critical |
+| `alert` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Alert |
+| `emergency` | `(String, List(#(String, FieldValue))) -> Nil` | Log at Emergency |
 | `debug_lazy` | `(fn() -> String, List(#(String, FieldValue))) -> Nil` | Lazy Debug |
 | `info_lazy` | … | Lazy Info |
+| `notice_lazy` | … | Lazy Notice |
 | `warning_lazy` | … | Lazy Warning |
 | `error_lazy` | … | Lazy Error |
+| `critical_lazy` | … | Lazy Critical |
+| `alert_lazy` | … | Lazy Alert |
+| `emergency_lazy` | … | Lazy Emergency |
 
 ### Namespaced loggers
 
@@ -607,10 +671,10 @@ behave identically on both targets.
 | `int(key, Int)` | `#(String, FInt)` | Preferred for integers |
 | `float(key, Float)` | `#(String, FFloat)` | Preferred for floats |
 | `bool(key, Bool)` | `#(String, FBool)` | Renders as `"true"`/`"false"` |
-| `field(key, String)` | `#(String, FString)` | Alias for `str` — legacy |
-| `int_field(key, Int)` | `#(String, FInt)` | Alias for `int` — legacy |
-| `float_field(key, Float)` | `#(String, FFloat)` | Alias for `float` — legacy |
-| `bool_field(key, Bool)` | `#(String, FBool)` | Alias for `bool` — legacy |
+| `field(key, String)` | `#(String, FString)` | Alias for `str` - legacy |
+| `int_field(key, Int)` | `#(String, FInt)` | Alias for `int` - legacy |
+| `float_field(key, Float)` | `#(String, FFloat)` | Alias for `float` - legacy |
+| `bool_field(key, Bool)` | `#(String, FBool)` | Alias for `bool` - legacy |
 
 ### Configuration
 
@@ -626,13 +690,17 @@ behave identically on both targets.
 
 | Function | Signature | Description |
 | :--- | :--- | :--- |
-| `set_sink` | `(Sink) -> Nil` | Register legacy sink `fn(Entry, String) -> Nil` |
+| `set_sink` | `(Sink) -> Nil` | Register a single legacy sink (shorthand for `set_sinks`) |
+| `set_sinks` | `(List(Sink)) -> Nil` | Register multiple legacy sinks |
 | `set_event_sink` | `(EventSink) -> Nil` | Register typed sink `fn(LogEvent) -> Nil` |
 | `clear_event_sink` | `() -> Nil` | Remove the typed event sink |
 | `default_sink` | `Sink` | Prints to stdout (default) |
 | `beam_logger_sink` | `Sink` | Routes through OTP logger / console.* |
+| `beam_event_sink` | `EventSink` | Structured typed fields to OTP logger |
 | `silent_sink` | `Sink` | Discards everything |
 | `test_sink` | `() -> #(EventSink, fn() -> List(LogEvent))` | Capture sink for tests |
+| `dev` | `() -> Nil` | Preset: Debug + Text + Auto colors + stdout |
+| `prod` | `() -> Nil` | Preset: Info + Json + no colors + beam_logger_sink |
 
 ### Context
 
@@ -647,7 +715,8 @@ behave identically on both targets.
 
 | Function | Description |
 | :--- | :--- |
-| `tap_debug` / `tap_info` / `tap_warning` / `tap_error` | Log and pass value through |
+| `tap_debug` / `tap_info` / `tap_notice` / `tap_warning` / `tap_error` | Log and pass value through |
+| `tap_critical` / `tap_alert` / `tap_emergency` | Log and pass value through (new levels) |
 | `log_error` | Log on `Result` `Error`, pass through |
 | `time` | Measure and log block duration |
 
