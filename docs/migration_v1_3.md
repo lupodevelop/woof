@@ -26,13 +26,13 @@ Use a constructor: `woof.str`, `woof.int`, `woof.float`, or `woof.bool`.
 
 ---
 
-## Field helpers — call sites unchanged
+## Field helpers - call sites unchanged
 
 If you were already using the field helpers, **call sites do not change**.
 Only the return type changed (from `#(String, String)` to `#(String, FieldValue)`).
 
 ```gleam
-// v1.2 — worked, still works
+// v1.2 - worked, still works
 woof.info("Order processed", [
   woof.field("order_id", "ORD-42"),
   woof.int_field("amount", 4999),
@@ -61,7 +61,7 @@ The old helpers are aliases. Prefer the new constructors for new code:
 
 ## Context and global context
 
-Same pattern — swap raw tuples for constructors.
+Same pattern - swap raw tuples for constructors.
 
 **Before**
 
@@ -90,7 +90,7 @@ let ctx: List(#(String, FieldValue)) = woof.get_global_context()
 
 ---
 
-## Custom formatters — unchanged
+## Custom formatters - unchanged
 
 If you have a `Custom` formatter, it receives an `Entry` with `fields: List(#(String, String))`.
 **Nothing changes here.** `FieldValue` is converted to string before `Entry` is built.
@@ -106,9 +106,9 @@ woof.set_format(woof.Custom(my_format))
 
 ---
 
-## Custom legacy sinks — unchanged
+## Custom legacy sinks - unchanged
 
-`Sink = fn(Entry, String) -> Nil` — unchanged.
+`Sink = fn(Entry, String) -> Nil` - unchanged.
 `Entry.fields` stays `List(#(String, String))`.
 
 ```gleam
@@ -130,12 +130,12 @@ update them to `"true"` / `"false"`.
 
 ---
 
-## Testing — use test_sink instead of custom sinks
+## Testing - use test_sink instead of custom sinks
 
 The old pattern (capturing via a custom sink + subject/channel):
 
 ```gleam
-// Old — v1.2
+// Old - v1.2
 let subject = process.new_subject()
 woof.set_sink(fn(entry, _) { process.send(subject, entry) })
 woof.info("something happened", [])
@@ -146,7 +146,7 @@ entry.message |> should.equal("something happened")
 The new pattern (typed capture):
 
 ```gleam
-// New — v1.3
+// New - v1.3
 let #(sink, get) = woof.test_sink()
 woof.set_sink(woof.silent_sink)
 woof.set_event_sink(sink)
@@ -158,6 +158,6 @@ event.message |> should.equal("something happened")
 event.fields  |> should.equal([#("code", woof.FInt(42))])
 ```
 
-The old approach still works — `Entry` and `Sink` are unchanged.
+The old approach still works - `Entry` and `Sink` are unchanged.
 `test_sink` is strictly better for new tests: no channels, no process boilerplate,
 typed fields you can actually assert on.

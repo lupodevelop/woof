@@ -1,7 +1,7 @@
-// woof FFI — JavaScript target
+// woof FFI - JavaScript target
 //
 // Global config lives in a module-level variable (safe: JS is
-// single-threaded). Context uses the same approach — there is no
+// single-threaded). Context uses the same approach - there is no
 // process dictionary on JS, but concurrency is cooperative so
 // push/pop stays balanced as long as callbacks are synchronous
 // (which they are in Gleam).
@@ -54,7 +54,7 @@ export function is_tty() {
 }
 
 // Route a log event through the level-aware console API.
-// Used by woof's beam_logger_sink/2 — the opt-in production sink.
+// Used by woof's beam_logger_sink/2 - the opt-in production sink.
 // On JS there is no centralised logger equivalent to OTP, so we use
 // console.debug/info/warn/error so browser DevTools and Node.js can
 // filter by severity.  The pre-formatted string is used so woof's own
@@ -65,16 +65,16 @@ export function beam_log(level, _message, _fields, _namespace, formatted) {
     console.debug(formatted);
   } else if (name === "Info") {
     console.info(formatted);
-  } else if (name === "Warning") {
+  } else if (name === "Notice" || name === "Warning") {
     console.warn(formatted);
-  } else if (name === "Error") {
+  } else if (name === "Error" || name === "Critical" || name === "Alert" || name === "Emergency") {
     console.error(formatted);
   } else {
     console.log(formatted);
   }
 }
 
-// test_sink() event capture — module-level array (JS is single-threaded).
+// test_sink() event capture - module-level array (JS is single-threaded).
 let _test_events = [];
 
 export function push_test_event(event) {
@@ -90,6 +90,24 @@ export function pop_all_test_events() {
 
 export function clear_test_events() {
   _test_events = [];
+  return undefined;
+}
+
+// beam_event_sink - typed EventSink that routes through console with level routing.
+// On JS, we use the pre-formatted message since there's no native structured logger.
+export function beam_event_log(level, message, _fields, _namespace) {
+  const name = level.constructor.name;
+  if (name === "Debug") {
+    console.debug(message);
+  } else if (name === "Info") {
+    console.info(message);
+  } else if (name === "Notice" || name === "Warning") {
+    console.warn(message);
+  } else if (name === "Error" || name === "Critical" || name === "Alert" || name === "Emergency") {
+    console.error(message);
+  } else {
+    console.log(message);
+  }
   return undefined;
 }
 

@@ -38,7 +38,7 @@ fn reset() -> Nil {
 pub fn main() -> Nil {
   io.println("")
   io.println("╔══════════════════════════════════════════════════════╗")
-  io.println("║          w o o f   —   dev demo (v1.3.0)             ║")
+  io.println("║          w o o f   -   dev demo (v1.3.0)             ║")
   io.println("╚══════════════════════════════════════════════════════╝")
 
   demo_basic_levels()
@@ -101,7 +101,7 @@ fn demo_basic_levels() -> Nil {
 fn demo_field_helpers() -> Nil {
   reset()
   sep("2 · Field helpers")
-  note("str / int / float / bool — typed constructors (v1.3)")
+  note("str / int / float / bool - typed constructors (v1.3)")
 
   woof.info("Order processed", [
     woof.str("order_id", "ORD-9912"),
@@ -125,7 +125,7 @@ fn demo_field_helpers() -> Nil {
 
 fn demo_level_filtering() -> Nil {
   reset()
-  sep("3 · Level filtering — set_level")
+  sep("3 · Level filtering - set_level")
 
   note("set_level(Warning) → debug and info are silently dropped")
   woof.set_level(woof.Warning)
@@ -139,12 +139,12 @@ fn demo_level_filtering() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Format — Text
+// 4. Format - Text
 // ---------------------------------------------------------------------------
 
 fn demo_format_text() -> Nil {
   reset()
-  sep("4 · Format — Text (default)")
+  sep("4 · Format - Text (default)")
   note("Human-readable multi-line output.")
 
   woof.set_format(woof.Text)
@@ -159,12 +159,12 @@ fn demo_format_text() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Format — Compact
+// 5. Format - Compact
 // ---------------------------------------------------------------------------
 
 fn demo_format_compact() -> Nil {
   reset()
-  sep("5 · Format — Compact")
+  sep("5 · Format - Compact")
   note("Single-line key=value pairs. Values with spaces are quoted.")
 
   woof.set_format(woof.Compact)
@@ -190,13 +190,13 @@ fn demo_format_compact() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Format — JSON
+// 6. Format - JSON
 // ---------------------------------------------------------------------------
 
 fn demo_format_json() -> Nil {
   reset()
-  sep("6 · Format — JSON")
-  note("One JSON object per line — ideal for log aggregators.")
+  sep("6 · Format - JSON")
+  note("One JSON object per line - ideal for log aggregators.")
 
   woof.set_format(woof.Json)
   woof.info("Payment processed", [
@@ -217,21 +217,25 @@ fn demo_format_json() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Format — Custom
+// 7. Format - Custom
 // ---------------------------------------------------------------------------
 
 fn demo_format_custom() -> Nil {
   reset()
-  sep("7 · Format — Custom formatter")
-  note("fn(Entry) -> String — the lowest-level escape hatch.")
+  sep("7 · Format - Custom formatter")
+  note("fn(Entry) -> String - the lowest-level escape hatch.")
 
   woof.set_format(
     woof.Custom(fn(entry) {
       let icon = case entry.level {
         woof.Debug -> "🔍"
         woof.Info -> "✅"
+        woof.Notice -> "📌"
         woof.Warning -> "⚠️ "
         woof.Error -> "❌"
+        woof.Critical -> "🔥"
+        woof.Alert -> "🚨"
+        woof.Emergency -> "💀"
       }
       let fields_str =
         list.map(entry.fields, fn(f) { " [" <> f.0 <> "=" <> f.1 <> "]" })
@@ -252,12 +256,12 @@ fn demo_format_custom() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 8. configure — set level + format + colors in one call
+// 8. configure - set level + format + colors in one call
 // ---------------------------------------------------------------------------
 
 fn demo_configure() -> Nil {
   reset()
-  sep("8 · configure — set level + format + colors at once")
+  sep("8 · configure - set level + format + colors at once")
   note("woof.Config{} sets all three fields atomically")
 
   woof.configure(woof.Config(
@@ -265,18 +269,18 @@ fn demo_configure() -> Nil {
     format: woof.Compact,
     colors: woof.Never,
   ))
-  woof.debug("dropped — below Info", [])
+  woof.debug("dropped - below Info", [])
   woof.info("Compact, no-color, Info+", [woof.str("via", "configure")])
   woof.warning("Compact warning too", [])
 }
 
 // ---------------------------------------------------------------------------
-// 9. Color control — set_colors
+// 9. Color control - set_colors
 // ---------------------------------------------------------------------------
 
 fn demo_colors() -> Nil {
   reset()
-  sep("9 · Color control — set_colors")
+  sep("9 · Color control - set_colors")
 
   woof.set_format(woof.Text)
 
@@ -298,12 +302,12 @@ fn demo_colors() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Namespaced loggers — new / log
+// 10. Namespaced loggers - new / log
 // ---------------------------------------------------------------------------
 
 fn demo_namespaced_logger() -> Nil {
   reset()
-  sep("10 · Namespaced loggers — new / log")
+  sep("10 · Namespaced loggers - new / log")
   note("woof.new(\"namespace\") returns an opaque Logger; use woof.log to emit")
 
   let db = woof.new("database")
@@ -321,12 +325,12 @@ fn demo_namespaced_logger() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 11. Lazy evaluation — *_lazy variants
+// 11. Lazy evaluation - *_lazy variants
 // ---------------------------------------------------------------------------
 
 fn demo_lazy_logging() -> Nil {
   reset()
-  sep("11 · Lazy evaluation — *_lazy")
+  sep("11 · Lazy evaluation - *_lazy")
   note("The message builder fn() is only called if the level is enabled")
 
   note("With set_level(Info), debug_lazy builder is NEVER executed")
@@ -344,12 +348,12 @@ fn demo_lazy_logging() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Global context — set_global_context
+// 12. Global context - set_global_context
 // ---------------------------------------------------------------------------
 
 fn demo_global_context() -> Nil {
   reset()
-  sep("12 · Global context — set_global_context")
+  sep("12 · Global context - set_global_context")
   note("Fields set here appear on EVERY subsequent log message")
 
   woof.set_global_context([
@@ -374,12 +378,12 @@ fn demo_global_context() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Scoped context — with_context
+// 13. Scoped context - with_context
 // ---------------------------------------------------------------------------
 
 fn demo_scoped_context() -> Nil {
   reset()
-  sep("13 · Scoped context — with_context")
+  sep("13 · Scoped context - with_context")
   note("Fields scoped to the callback; previous context is restored after")
 
   woof.set_global_context([woof.str("app", "woof-demo")])
@@ -393,17 +397,17 @@ fn demo_scoped_context() -> Nil {
   woof.info("Validation passed", [])
   woof.info("Sending response", [woof.int("status", 200)])
 
-  note("Outside both contexts — only global 'app' field remains")
+  note("Outside both contexts - only global 'app' field remains")
   woof.set_global_context([])
 }
 
 // ---------------------------------------------------------------------------
-// 14. Pipeline helpers — tap_debug / tap_info / tap_warning / tap_error
+// 14. Pipeline helpers - tap_debug / tap_info / tap_warning / tap_error
 // ---------------------------------------------------------------------------
 
 fn demo_pipeline_tap() -> Nil {
   reset()
-  sep("14 · Pipeline helpers — tap_*")
+  sep("14 · Pipeline helpers - tap_*")
   note("tap_* logs and passes the value through unchanged (pipeline-friendly)")
 
   let ids = [1, 2, 3, 4, 5]
@@ -425,7 +429,7 @@ fn demo_pipeline_tap() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 15. Result logging — log_error
+// 15. Result logging - log_error
 // ---------------------------------------------------------------------------
 
 fn demo_log_error() -> Nil {
@@ -450,12 +454,12 @@ fn demo_log_error() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 16. Timing — time
+// 16. Timing - time
 // ---------------------------------------------------------------------------
 
 fn demo_time() -> Nil {
   reset()
-  sep("16 · Timing — time")
+  sep("16 · Timing - time")
   note("Wraps a block, logs '<label> completed' with duration_ms at Info level")
 
   let _rows =
@@ -472,17 +476,17 @@ fn demo_time() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 17. woof.format/2 utility — format without emitting
+// 17. woof.format/2 utility - format without emitting
 // ---------------------------------------------------------------------------
 
 fn demo_format_utility() -> Nil {
   reset()
-  sep("17 · format/2 — format an Entry without emitting it")
+  sep("17 · format/2 - format an Entry without emitting it")
   note(
-    "Entry takes pre-serialised string fields — useful for custom formatters",
+    "Entry takes pre-serialised string fields - useful for custom formatters",
   )
 
-  // Entry.fields is List(#(String, String)) — plain strings, always.
+  // Entry.fields is List(#(String, String)) - plain strings, always.
   // Use string values directly when constructing Entry for format testing.
   let entry =
     woof.Entry(
@@ -525,12 +529,12 @@ fn demo_level_name() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 19. Sinks — default_sink / beam_logger_sink / custom sinks
+// 19. Sinks - default_sink / beam_logger_sink / custom sinks
 // ---------------------------------------------------------------------------
 
 fn demo_sinks() -> Nil {
   reset()
-  sep("19 · Sinks — default_sink / beam_logger_sink / custom")
+  sep("19 · Sinks - default_sink / beam_logger_sink / custom")
 
   note("default_sink → io.println (the default, output is what you see here)")
   woof.set_sink(woof.default_sink)
@@ -548,7 +552,7 @@ fn demo_sinks() -> Nil {
   woof.warning("BEAM logger owns format and routing now", [])
 
   note(
-    "custom sink — receives both the structured Entry and the formatted string",
+    "custom sink - receives both the structured Entry and the formatted string",
   )
   reset()
   woof.set_format(woof.Json)
@@ -576,12 +580,12 @@ fn demo_sinks() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// 20. test_sink — capture LogEvents for inspection (v1.3)
+// 20. test_sink - capture LogEvents for inspection (v1.3)
 // ---------------------------------------------------------------------------
 
 fn demo_test_sink() -> Nil {
   reset()
-  sep("20 · test_sink — capture typed LogEvents (v1.3)")
+  sep("20 · test_sink - capture typed LogEvents (v1.3)")
   note("test_sink() returns a typed EventSink plus a get() function")
   note("Fields keep their original types through the entire pipeline")
 

@@ -11,7 +11,7 @@ pub fn main() -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — reset state between tests
+// Helpers - reset state between tests
 // ---------------------------------------------------------------------------
 
 fn reset() {
@@ -92,12 +92,28 @@ pub fn text_all_levels_test() {
   |> string.starts_with("[INFO]")
   |> should.be_true
 
+  woof.format(make(woof.Notice), woof.Text)
+  |> string.starts_with("[NOTICE]")
+  |> should.be_true
+
   woof.format(make(woof.Warning), woof.Text)
   |> string.starts_with("[WARN]")
   |> should.be_true
 
   woof.format(make(woof.Error), woof.Text)
   |> string.starts_with("[ERROR]")
+  |> should.be_true
+
+  woof.format(make(woof.Critical), woof.Text)
+  |> string.starts_with("[CRIT]")
+  |> should.be_true
+
+  woof.format(make(woof.Alert), woof.Text)
+  |> string.starts_with("[ALERT]")
+  |> should.be_true
+
+  woof.format(make(woof.Emergency), woof.Text)
+  |> string.starts_with("[EMERG]")
   |> should.be_true
 }
 
@@ -223,8 +239,12 @@ pub fn custom_formatter_test() {
 pub fn level_name_test() {
   woof.level_name(woof.Debug) |> should.equal("debug")
   woof.level_name(woof.Info) |> should.equal("info")
+  woof.level_name(woof.Notice) |> should.equal("notice")
   woof.level_name(woof.Warning) |> should.equal("warning")
   woof.level_name(woof.Error) |> should.equal("error")
+  woof.level_name(woof.Critical) |> should.equal("critical")
+  woof.level_name(woof.Alert) |> should.equal("alert")
+  woof.level_name(woof.Emergency) |> should.equal("emergency")
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +256,8 @@ pub fn level_filtering_drops_below_minimum_test() {
 
   let call_count = fn(entry: woof.Entry) -> String {
     case entry.level {
-      woof.Warning | woof.Error -> ""
+      woof.Warning | woof.Error | woof.Critical | woof.Alert | woof.Emergency ->
+        ""
       _ -> panic as "Unexpected log emission below minimum level"
     }
   }
@@ -248,6 +269,7 @@ pub fn level_filtering_drops_below_minimum_test() {
   ))
   woof.debug("should not appear", [])
   woof.info("should not appear", [])
+  woof.notice("should not appear", [])
   woof.warning("should appear", [])
   woof.error("should appear", [])
 
@@ -616,7 +638,7 @@ pub fn time_returns_body_result_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Field constructors — typed (v1.3)
+// Field constructors - typed (v1.3)
 // ---------------------------------------------------------------------------
 
 pub fn field_str_test() {
@@ -643,7 +665,7 @@ pub fn field_bool_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Field constructors — string rendering in Entry (legacy sink path)
+// Field constructors - string rendering in Entry (legacy sink path)
 // ---------------------------------------------------------------------------
 
 pub fn typed_fields_render_to_strings_in_entry_test() {
@@ -652,7 +674,7 @@ pub fn typed_fields_render_to_strings_in_entry_test() {
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Custom(fn(entry) {
-      // Entry.fields always carries plain strings — FieldValue is
+      // Entry.fields always carries plain strings - FieldValue is
       // serialised before Entry is built, so legacy sinks/formatters
       // never see the raw types.
       entry.fields
@@ -680,7 +702,7 @@ pub fn typed_fields_render_to_strings_in_entry_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy field helpers — still work, return FieldValue now
+// Legacy field helpers - still work, return FieldValue now
 // ---------------------------------------------------------------------------
 
 pub fn legacy_field_helper_string_test() {
@@ -713,7 +735,7 @@ pub fn field_helpers_in_log_call_test() {
     level: woof.Debug,
     format: woof.Custom(fn(entry) {
       // In Entry, every FieldValue is serialised to a string.
-      // FBool renders lowercase ("true"/"false") — consistent with JSON.
+      // FBool renders lowercase ("true"/"false") - consistent with JSON.
       entry.fields
       |> should.equal([
         #("path", "/api"),
@@ -737,7 +759,7 @@ pub fn field_helpers_in_log_call_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Sinks — legacy (Entry + formatted string)
+// Sinks - legacy (Entry + formatted string)
 // ---------------------------------------------------------------------------
 
 pub fn sink_receives_entry_and_formatted_string_test() {
@@ -845,7 +867,7 @@ pub fn beam_logger_sink_works_with_namespace_and_fields_test() {
 }
 
 // ---------------------------------------------------------------------------
-// EventSink — typed LogEvent path (v1.3)
+// EventSink - typed LogEvent path (v1.3)
 // ---------------------------------------------------------------------------
 
 pub fn event_sink_receives_log_event_test() {
@@ -998,7 +1020,7 @@ pub fn event_sink_captures_multiple_events_in_order_test() {
 }
 
 // ---------------------------------------------------------------------------
-// BEAM logger integration — verification that logger:log/4 is actually called
+// BEAM logger integration - verification that logger:log/4 is actually called
 // (Erlang target only: relies on OTP logger handler API)
 // ---------------------------------------------------------------------------
 
@@ -1112,8 +1134,12 @@ pub fn is_enabled_test() {
   woof.set_level(woof.Warning)
   woof.is_enabled(woof.Debug) |> should.be_false
   woof.is_enabled(woof.Info) |> should.be_false
+  woof.is_enabled(woof.Notice) |> should.be_false
   woof.is_enabled(woof.Warning) |> should.be_true
   woof.is_enabled(woof.Error) |> should.be_true
+  woof.is_enabled(woof.Critical) |> should.be_true
+  woof.is_enabled(woof.Alert) |> should.be_true
+  woof.is_enabled(woof.Emergency) |> should.be_true
   reset()
 }
 
@@ -1133,3 +1159,368 @@ pub fn append_global_context_adds_to_existing_test() {
   |> should.equal([woof.str("app", "test"), woof.str("env", "ci")])
   reset()
 }
+
+// ---------------------------------------------------------------------------
+// v1.4 - New levels: notice, critical, alert, emergency
+// ---------------------------------------------------------------------------
+
+pub fn notice_emits_at_notice_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.notice("something notable", [woof.str("k", "v")])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Notice)
+  event.message |> should.equal("something notable")
+  reset()
+}
+
+pub fn critical_emits_at_critical_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.critical("system degraded", [woof.int("code", 503)])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Critical)
+  event.message |> should.equal("system degraded")
+  event.fields |> should.equal([#("code", woof.FInt(503))])
+  reset()
+}
+
+pub fn alert_emits_at_alert_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.alert("immediate action required", [])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Alert)
+  event.message |> should.equal("immediate action required")
+  reset()
+}
+
+pub fn emergency_emits_at_emergency_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.emergency("system is unusable", [])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Emergency)
+  event.message |> should.equal("system is unusable")
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - Lazy variants for new levels
+// ---------------------------------------------------------------------------
+
+pub fn notice_lazy_skips_when_level_disabled_test() {
+  reset()
+  woof.set_level(woof.Warning)
+  woof.notice_lazy(fn() { panic as "notice_lazy thunk must not run" }, [])
+  reset()
+}
+
+pub fn critical_lazy_skips_when_level_disabled_test() {
+  reset()
+  woof.set_level(woof.Emergency)
+  woof.critical_lazy(fn() { panic as "critical_lazy thunk must not run" }, [])
+  reset()
+}
+
+pub fn alert_lazy_evaluates_when_enabled_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.alert_lazy(fn() { "computed alert" }, [])
+
+  let assert [event] = get()
+  event.message |> should.equal("computed alert")
+  reset()
+}
+
+pub fn emergency_lazy_evaluates_when_enabled_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.emergency_lazy(fn() { "computed emergency" }, [])
+
+  let assert [event] = get()
+  event.message |> should.equal("computed emergency")
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - 8-level ordering
+// ---------------------------------------------------------------------------
+
+pub fn all_eight_levels_ordered_correctly_test() {
+  reset()
+  woof.set_level(woof.Notice)
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.debug("filtered", [])
+  woof.info("filtered", [])
+  woof.notice("captured", [])
+  woof.warning("captured", [])
+  woof.error("captured", [])
+  woof.critical("captured", [])
+  woof.alert("captured", [])
+  woof.emergency("captured", [])
+
+  let events = get()
+  events |> list.length |> should.equal(6)
+
+  let assert [e1, e2, e3, e4, e5, e6] = events
+  e1.level |> should.equal(woof.Notice)
+  e2.level |> should.equal(woof.Warning)
+  e3.level |> should.equal(woof.Error)
+  e4.level |> should.equal(woof.Critical)
+  e5.level |> should.equal(woof.Alert)
+  e6.level |> should.equal(woof.Emergency)
+
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - New level format output
+// ---------------------------------------------------------------------------
+
+pub fn new_levels_compact_format_test() {
+  let make = fn(level) {
+    woof.Entry(
+      level: level,
+      message: "x",
+      fields: [],
+      namespace: None,
+      timestamp: "2026-02-11T00:00:00.000Z",
+    )
+  }
+
+  woof.format(make(woof.Notice), woof.Compact)
+  |> string.starts_with("NOTICE")
+  |> should.be_true
+
+  woof.format(make(woof.Critical), woof.Compact)
+  |> string.starts_with("CRIT")
+  |> should.be_true
+
+  woof.format(make(woof.Alert), woof.Compact)
+  |> string.starts_with("ALERT")
+  |> should.be_true
+
+  woof.format(make(woof.Emergency), woof.Compact)
+  |> string.starts_with("EMERG")
+  |> should.be_true
+}
+
+pub fn new_levels_json_format_test() {
+  let make = fn(level) {
+    woof.Entry(
+      level: level,
+      message: "x",
+      fields: [],
+      namespace: None,
+      timestamp: "2026-02-11T00:00:00.000Z",
+    )
+  }
+
+  woof.format(make(woof.Notice), woof.Json)
+  |> string.contains("\"level\":\"notice\"")
+  |> should.be_true
+
+  woof.format(make(woof.Critical), woof.Json)
+  |> string.contains("\"level\":\"critical\"")
+  |> should.be_true
+
+  woof.format(make(woof.Alert), woof.Json)
+  |> string.contains("\"level\":\"alert\"")
+  |> should.be_true
+
+  woof.format(make(woof.Emergency), woof.Json)
+  |> string.contains("\"level\":\"emergency\"")
+  |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - Multi-sink dispatcher
+// ---------------------------------------------------------------------------
+
+pub fn set_sinks_replaces_previous_sink_test() {
+  reset()
+  woof.set_sink(fn(_: woof.Entry, _: String) {
+    panic as "old sink must not fire after set_sinks"
+  })
+  woof.set_sinks([woof.silent_sink])
+  woof.info("replaced", [])
+  reset()
+}
+
+pub fn set_sinks_empty_list_means_no_output_test() {
+  reset()
+  woof.set_sinks([])
+  woof.info("silent via empty sinks", [])
+  reset()
+}
+
+pub fn set_sinks_multiple_sinks_both_receive_test() {
+  reset()
+
+  let assert_message = fn(entry: woof.Entry, _: String) {
+    entry.message |> should.equal("dispatch")
+  }
+  let assert_level = fn(entry: woof.Entry, _: String) {
+    entry.level |> should.equal(woof.Info)
+  }
+
+  woof.set_sinks([assert_message, assert_level])
+  woof.info("dispatch", [])
+
+  reset()
+}
+
+pub fn set_sink_still_works_as_shorthand_test() {
+  reset()
+
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.set_sink(woof.silent_sink)
+  woof.warning("via set_sink", [])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Warning)
+
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - Presets: dev() and prod()
+// ---------------------------------------------------------------------------
+
+pub fn dev_preset_enables_debug_level_test() {
+  reset()
+  woof.dev()
+  woof.is_enabled(woof.Debug) |> should.be_true
+  woof.is_enabled(woof.Notice) |> should.be_true
+  reset()
+}
+
+pub fn prod_preset_enables_info_not_debug_test() {
+  reset()
+  woof.prod()
+  woof.is_enabled(woof.Debug) |> should.be_false
+  woof.is_enabled(woof.Info) |> should.be_true
+  woof.is_enabled(woof.Notice) |> should.be_true
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.4 - beam_event_sink (typed EventSink for OTP logger)
+// ---------------------------------------------------------------------------
+
+pub fn beam_event_sink_does_not_crash_test() {
+  reset()
+  woof.set_event_sink(woof.beam_event_sink)
+  woof.info("beam event test", [woof.str("key", "val"), woof.int("n", 42)])
+  woof.notice("beam notice", [])
+  woof.critical("beam critical", [woof.bool("fatal", True)])
+  woof.emergency("beam emergency", [woof.float("load", 99.9)])
+  reset()
+}
+
+pub fn beam_event_sink_and_legacy_sink_coexist_test() {
+  reset()
+
+  woof.set_sink(woof.silent_sink)
+  woof.set_event_sink(woof.beam_event_sink)
+
+  let #(capture, get) = woof.test_sink()
+  woof.set_event_sink(capture)
+
+  woof.info("coexist", [woof.str("a", "b")])
+
+  let assert [event] = get()
+  event.message |> should.equal("coexist")
+
+  reset()
+}
+
+@target(erlang)
+pub fn beam_event_sink_routes_to_otp_logger_test() {
+  reset()
+  install_test_handler()
+  woof.set_event_sink(woof.beam_event_sink)
+
+  woof.info("structured event", [woof.str("env", "prod"), woof.int("count", 7)])
+
+  let assert Ok(event) = pop_test_event()
+  test_event_level(event) |> should.equal("info")
+  test_event_message(event) |> should.equal("structured event")
+  test_event_domain_is_woof(event) |> should.be_true
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
+pub fn beam_event_sink_int_field_is_native_integer_test() {
+  reset()
+  install_test_handler()
+  woof.set_event_sink(woof.beam_event_sink)
+
+  woof.info("typed int", [woof.int("count", 99)])
+
+  let assert Ok(event) = pop_test_event()
+  test_event_get_int_field(event, "count") |> should.equal(Ok(99))
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
+pub fn beam_logger_sink_new_levels_reach_logger_test() {
+  reset()
+  install_test_handler()
+  woof.set_sink(woof.beam_logger_sink)
+
+  woof.notice("lvl notice", [])
+  woof.critical("lvl critical", [])
+  woof.alert("lvl alert", [])
+  woof.emergency("lvl emergency", [])
+
+  let assert Ok(e1) = pop_test_event()
+  test_event_level(e1) |> should.equal("notice")
+  test_event_message(e1) |> should.equal("lvl notice")
+
+  let assert Ok(e2) = pop_test_event()
+  test_event_level(e2) |> should.equal("critical")
+  test_event_message(e2) |> should.equal("lvl critical")
+
+  let assert Ok(e3) = pop_test_event()
+  test_event_level(e3) |> should.equal("alert")
+  test_event_message(e3) |> should.equal("lvl alert")
+
+  let assert Ok(e4) = pop_test_event()
+  test_event_level(e4) |> should.equal("emergency")
+  test_event_message(e4) |> should.equal("lvl emergency")
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
+@external(erlang, "woof_ffi", "test_event_get_int_field")
+fn test_event_get_int_field(
+  event: Dynamic,
+  field_name: String,
+) -> Result(Int, Nil)
