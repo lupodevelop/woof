@@ -24,7 +24,7 @@ pub type FieldValue {
 
 /// A fully typed log event, delivered to every registered `EventSink`.
 ///
-/// Unlike `Entry`, fields here carry their original Gleam types — no
+/// Unlike `Entry`, fields here carry their original Gleam types - no
 /// information is lost before the sink decides how to format or route
 /// the event.  Use `test_sink` to capture `LogEvent`s in tests.
 pub type LogEvent {
@@ -41,21 +41,38 @@ pub type LogEvent {
 ///
 /// Only messages at or above the configured minimum level are emitted.
 /// The default level is `Debug` (everything is printed).
+///
+/// The eight levels mirror the OTP logger / syslog severity scale:
+///
+/// | Level       | Use for                                      |
+/// | :---------- | :------------------------------------------- |
+/// | `Debug`     | Development traces                           |
+/// | `Info`      | Normal application flow                      |
+/// | `Notice`    | Significant business events (not errors)     |
+/// | `Warning`   | Anomalous but recoverable situations         |
+/// | `Error`     | Failures requiring attention                 |
+/// | `Critical`  | System degradation, partial failure          |
+/// | `Alert`     | Immediate action required                    |
+/// | `Emergency` | System is unusable                           |
 pub type Level {
   Debug
   Info
+  Notice
   Warning
   Error
+  Critical
+  Alert
+  Emergency
 }
 
 /// Controls how log output is formatted.
 ///
-/// - `Text` — human-readable lines, great for development.
-/// - `Json` — one JSON object per line, great for production and log
+/// - `Text` - human-readable lines, great for development.
+/// - `Json` - one JSON object per line, great for production and log
 ///   aggregation tools.
-/// - `Compact` — single-line, key=value pairs.  A middle ground between
+/// - `Compact` - single-line, key=value pairs.  A middle ground between
 ///   `Text` readability and `Json` parsability.
-/// - `Custom` — bring your own formatter. The function receives a fully
+/// - `Custom` - bring your own formatter. The function receives a fully
 ///   assembled `Entry` and must return the string to print.  This is the
 ///   escape hatch for integrating with other formatting or output libraries.
 pub type Format {
@@ -123,7 +140,7 @@ pub opaque type Logger {
 /// Replace the current configuration.
 ///
 /// This sets level, format, and color mode at once.  Global context is
-/// left untouched — use `set_global_context` if you need to change it.
+/// left untouched - use `set_global_context` if you need to change it.
 pub fn configure(config: Config) -> Nil {
   let state = read_state()
   write_state(
@@ -168,17 +185,29 @@ pub fn set_format(format: Format) -> Nil {
 
 /// Set the legacy sink function used to emit formatted logs.
 ///
-/// The legacy sink receives an `Entry` (with string-serialised fields) and
-/// the pre-formatted string.  If you need the original `FieldValue` types
-/// use `set_event_sink` instead.  Both sinks can be active at the same time.
+/// Replaces all registered sinks with the single given sink.  The legacy sink
+/// receives an `Entry` (with string-serialised fields) and the pre-formatted
+/// string.  For the original `FieldValue` types use `set_event_sink` instead.
+///
+/// Equivalent to `set_sinks([sink])`.
 pub fn set_sink(sink: Sink) -> Nil {
+  set_sinks([sink])
+}
+
+/// Register multiple legacy sinks.  Every registered sink is called in order
+/// for each emitted log event.  Replaces any previously registered sinks.
+///
+/// ```gleam
+/// woof.set_sinks([woof.default_sink, my_datadog_sink])
+/// ```
+pub fn set_sinks(sinks: List(Sink)) -> Nil {
   let state = read_state()
-  write_state(State(..state, sink: sink))
+  write_state(State(..state, sinks: sinks))
 }
 
 /// Register a typed event sink.
 ///
-/// The sink receives a `LogEvent` with fields as `FieldValue` — types are
+/// The sink receives a `LogEvent` with fields as `FieldValue` - types are
 /// preserved through the entire pipeline.  The legacy `Sink` (if any) is
 /// called independently; both are active simultaneously.
 ///
@@ -194,7 +223,7 @@ pub fn clear_event_sink() -> Nil {
   write_state(State(..state, event_sink: None))
 }
 
-/// The default sink — prints the formatted log line to standard output.
+/// The default sink - prints the formatted log line to standard output.
 ///
 /// This is the out-of-the-box behaviour: zero configuration, beautiful
 /// output on any terminal.  Useful when building a custom sink that still
@@ -227,7 +256,7 @@ pub fn default_sink(_entry: Entry, formatted: String) -> Nil {
 ///
 /// On the **JavaScript target** the event is passed to the level-appropriate
 /// `console` method (`console.debug`, `console.info`, `console.warn`, or
-/// `console.error`) — the JS equivalent of routing by severity.
+/// `console.error`) - the JS equivalent of routing by severity.
 ///
 /// ## Usage
 ///
@@ -249,12 +278,44 @@ pub fn beam_logger_sink(entry: Entry, formatted: String) -> Nil {
   )
 }
 
+/// A typed event sink that routes log events through the OTP logger with
+/// fully structured metadata.  Unlike `beam_logger_sink`, field values
+/// are passed as native Erlang terms (`integer()`, `float()`, `boolean()`,
+/// `binary()`) rather than pre-formatted strings.
+///
+/// Register alongside or instead of the legacy `beam_logger_sink`:
+///
+/// ```gleam
+/// woof.set_event_sink(woof.beam_event_sink)
+/// ```
+///
+/// On the JavaScript target the event is routed to the level-appropriate
+/// `console` method, same as `beam_logger_sink`.
+pub fn beam_event_sink(event: LogEvent) -> Nil {
+  ffi_beam_event_log(event.level, event.message, event.fields, event.namespace)
+}
+
 /// A sink that does nothing and discards all log events.
 ///
 /// Useful for muting logs entirely, for example during test runs:
 /// `woof.set_sink(woof.silent_sink)`
 pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
   Nil
+}
+
+/// Configure woof for **development**: `Debug` level, `Text` format, `Auto`
+/// colors, stdout output.  Clears any previously registered sinks.
+pub fn dev() -> Nil {
+  configure(Config(level: Debug, format: Text, colors: Auto))
+  set_sinks([default_sink])
+}
+
+/// Configure woof for **production**: `Info` level, `Json` format, no
+/// colors, OTP logger output via `beam_logger_sink`.  Clears any previously
+/// registered sinks.
+pub fn prod() -> Nil {
+  configure(Config(level: Info, format: Json, colors: Never))
+  set_sinks([beam_logger_sink])
 }
 
 /// Build a capture sink for use in tests.
@@ -282,7 +343,7 @@ pub fn test_sink() -> #(EventSink, fn() -> List(LogEvent)) {
 }
 
 // ---------------------------------------------------------------------------
-// Logging — plain (no namespace)
+// Logging - plain (no namespace)
 // ---------------------------------------------------------------------------
 
 /// Log at Debug level.
@@ -303,6 +364,29 @@ pub fn warning(message: String, fields: List(#(String, FieldValue))) -> Nil {
 /// Log at Error level.
 pub fn error(message: String, fields: List(#(String, FieldValue))) -> Nil {
   emit(Error, message, fields, None)
+}
+
+/// Log at Notice level.  Use for significant business events that are not
+/// errors - successful deployments, config reloads, scheduled task completions.
+pub fn notice(message: String, fields: List(#(String, FieldValue))) -> Nil {
+  emit(Notice, message, fields, None)
+}
+
+/// Log at Critical level.  Use when the system is partially degraded and
+/// immediate investigation is required.
+pub fn critical(message: String, fields: List(#(String, FieldValue))) -> Nil {
+  emit(Critical, message, fields, None)
+}
+
+/// Log at Alert level.  Use when automatic action is insufficient and a
+/// human must intervene right away.
+pub fn alert(message: String, fields: List(#(String, FieldValue))) -> Nil {
+  emit(Alert, message, fields, None)
+}
+
+/// Log at Emergency level.  Use when the system is completely unusable.
+pub fn emergency(message: String, fields: List(#(String, FieldValue))) -> Nil {
+  emit(Emergency, message, fields, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +427,38 @@ pub fn error_lazy(
   emit_lazy(Error, build, fields, None)
 }
 
+/// Log at Notice level, evaluating the message only if Notice is enabled.
+pub fn notice_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  emit_lazy(Notice, build, fields, None)
+}
+
+/// Log at Critical level, evaluating the message only if Critical is enabled.
+pub fn critical_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  emit_lazy(Critical, build, fields, None)
+}
+
+/// Log at Alert level, evaluating the message only if Alert is enabled.
+pub fn alert_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  emit_lazy(Alert, build, fields, None)
+}
+
+/// Log at Emergency level, evaluating the message only if Emergency is enabled.
+pub fn emergency_lazy(
+  build: fn() -> String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  emit_lazy(Emergency, build, fields, None)
+}
+
 // ---------------------------------------------------------------------------
 // Namespaced logging
 // ---------------------------------------------------------------------------
@@ -366,7 +482,7 @@ pub fn log(
 }
 
 // ---------------------------------------------------------------------------
-// Field constructors — typed (v1.3)
+// Field constructors - typed (v1.3)
 // ---------------------------------------------------------------------------
 
 /// Create a string field.
@@ -413,28 +529,28 @@ pub fn bool(key: String, value: Bool) -> #(String, FieldValue) {
 
 /// Create a string field.
 ///
-/// Prefer `woof.str` — this alias is kept for backwards compatibility.
+/// Prefer `woof.str` - this alias is kept for backwards compatibility.
 pub fn field(key: String, value: String) -> #(String, FieldValue) {
   str(key, value)
 }
 
 /// Create a field from an `Int`.
 ///
-/// Prefer `woof.int` — this alias is kept for backwards compatibility.
+/// Prefer `woof.int` - this alias is kept for backwards compatibility.
 pub fn int_field(key: String, value: Int) -> #(String, FieldValue) {
   int(key, value)
 }
 
 /// Create a field from a `Float`.
 ///
-/// Prefer `woof.float` — this alias is kept for backwards compatibility.
+/// Prefer `woof.float` - this alias is kept for backwards compatibility.
 pub fn float_field(key: String, value: Float) -> #(String, FieldValue) {
   float(key, value)
 }
 
 /// Create a field from a `Bool`.
 ///
-/// Prefer `woof.bool` — this alias is kept for backwards compatibility.
+/// Prefer `woof.bool` - this alias is kept for backwards compatibility.
 pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
   bool(key, value)
 }
@@ -448,7 +564,7 @@ pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
 /// Fields from the context are merged with inline fields.  If a key appears
 /// in both, the inline value wins (it comes last in the list).
 ///
-/// Contexts can be nested — inner fields accumulate on top of outer ones.
+/// Contexts can be nested - inner fields accumulate on top of outer ones.
 ///
 /// On the BEAM each process gets its own context (process dictionary), so
 /// concurrent request handlers never interfere with each other.
@@ -487,7 +603,7 @@ pub fn append_global_context(fields: List(#(String, FieldValue))) -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — tap
+// Helpers - tap
 // ---------------------------------------------------------------------------
 
 /// Log the value at Info level and pass it through.  Fits naturally in
@@ -531,12 +647,52 @@ pub fn tap_error(
   value
 }
 
+/// Log the value at Notice level and pass it through.
+pub fn tap_notice(
+  value: a,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> a {
+  notice(message, fields)
+  value
+}
+
+/// Log the value at Critical level and pass it through.
+pub fn tap_critical(
+  value: a,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> a {
+  critical(message, fields)
+  value
+}
+
+/// Log the value at Alert level and pass it through.
+pub fn tap_alert(
+  value: a,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> a {
+  alert(message, fields)
+  value
+}
+
+/// Log the value at Emergency level and pass it through.
+pub fn tap_emergency(
+  value: a,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> a {
+  emergency(message, fields)
+  value
+}
+
 // ---------------------------------------------------------------------------
-// Helpers — Result logging
+// Helpers - Result logging
 // ---------------------------------------------------------------------------
 
 /// If the `Result` is `Error`, log the message at Error level and pass
-/// the original value through — useful in result pipelines.
+/// the original value through - useful in result pipelines.
 pub fn log_error(
   res: Result(a, b),
   message: String,
@@ -552,12 +708,12 @@ pub fn log_error(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — timing
+// Helpers - timing
 // ---------------------------------------------------------------------------
 
 /// Measure how long `body` takes and log it at Info level.
 ///
-/// Returns whatever `body` returns — the timing log is a side effect.
+/// Returns whatever `body` returns - the timing log is a side effect.
 pub fn time(label: String, body: fn() -> a) -> a {
   let start = ffi_monotonic_now()
   let value = body()
@@ -585,13 +741,17 @@ pub fn level_name(level: Level) -> String {
   case level {
     Debug -> "debug"
     Info -> "info"
+    Notice -> "notice"
     Warning -> "warning"
     Error -> "error"
+    Critical -> "critical"
+    Alert -> "alert"
+    Emergency -> "emergency"
   }
 }
 
 // ---------------------------------------------------------------------------
-// Internals — state
+// Internals - state
 // ---------------------------------------------------------------------------
 
 type State {
@@ -600,7 +760,7 @@ type State {
     format: Format,
     colors: ColorMode,
     global_context: List(#(String, FieldValue)),
-    sink: Sink,
+    sinks: List(Sink),
     event_sink: Option(EventSink),
   )
 }
@@ -611,7 +771,7 @@ fn default_state() -> State {
     format: Text,
     colors: Auto,
     global_context: [],
-    sink: default_sink,
+    sinks: [default_sink],
     event_sink: None,
   )
 }
@@ -625,7 +785,7 @@ fn write_state(state: State) -> Nil {
 }
 
 // ---------------------------------------------------------------------------
-// Internals — field serialisation
+// Internals - field serialisation
 // ---------------------------------------------------------------------------
 
 fn field_value_to_string(fv: FieldValue) -> String {
@@ -651,7 +811,7 @@ fn fields_to_strings(
 }
 
 // ---------------------------------------------------------------------------
-// Internals — emit
+// Internals - emit
 // ---------------------------------------------------------------------------
 
 fn emit(
@@ -691,7 +851,7 @@ fn do_emit(
   let all_fields = list.flatten([state.global_context, ctx, fields])
   let timestamp = ffi_now()
 
-  // ── Legacy sink path — serialise FieldValue → String ──────────────────
+  // ── Legacy sink path - serialise FieldValue → String ──────────────────
   let string_fields = fields_to_strings(all_fields)
   let entry =
     Entry(
@@ -702,9 +862,9 @@ fn do_emit(
       timestamp: timestamp,
     )
   let formatted = format_entry(entry, state.format, state.colors)
-  state.sink(entry, formatted)
+  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
 
-  // ── Typed event sink path — preserve FieldValue ───────────────────────
+  // ── Typed event sink path - preserve FieldValue ───────────────────────
   case state.event_sink {
     None -> Nil
     Some(event_sink_fn) -> {
@@ -729,13 +889,17 @@ fn level_to_int(level: Level) -> Int {
   case level {
     Debug -> 0
     Info -> 1
-    Warning -> 2
-    Error -> 3
+    Notice -> 2
+    Warning -> 3
+    Error -> 4
+    Critical -> 5
+    Alert -> 6
+    Emergency -> 7
   }
 }
 
 // ---------------------------------------------------------------------------
-// Internals — formatting
+// Internals - formatting
 // ---------------------------------------------------------------------------
 
 fn format_entry(
@@ -867,7 +1031,7 @@ fn format_compact(entry: Entry) -> String {
   }
 }
 
-/// JSON format — one object per line (NDJSON / JSON Lines).
+/// JSON format - one object per line (NDJSON / JSON Lines).
 ///
 /// Example:
 ///   {"level":"info","time":"2026-…","msg":"Server started","port":"3000"}
@@ -919,8 +1083,12 @@ fn level_tag(level: Level) -> String {
   case level {
     Debug -> "DEBUG"
     Info -> "INFO"
+    Notice -> "NOTICE"
     Warning -> "WARN"
     Error -> "ERROR"
+    Critical -> "CRIT"
+    Alert -> "ALERT"
+    Emergency -> "EMERG"
   }
 }
 
@@ -938,18 +1106,26 @@ const ansi_reset = "\u{001b}[0m"
 
 const ansi_dim = "\u{001b}[90m"
 
+const ansi_cyan = "\u{001b}[36m"
+
 const ansi_yellow = "\u{001b}[33m"
 
 const ansi_blue = "\u{001b}[34m"
 
 const ansi_red_bold = "\u{001b}[1;31m"
 
+const ansi_magenta_bold = "\u{001b}[1;35m"
+
 fn level_color(level: Level) -> String {
   case level {
     Debug -> ansi_dim
     Info -> ansi_blue
+    Notice -> ansi_cyan
     Warning -> ansi_yellow
     Error -> ansi_red_bold
+    Critical -> ansi_magenta_bold
+    Alert -> ansi_red_bold
+    Emergency -> ansi_red_bold
   }
 }
 
@@ -1012,3 +1188,12 @@ fn ffi_pop_all_test_events() -> List(LogEvent)
 @external(erlang, "woof_ffi", "clear_test_events")
 @external(javascript, "./woof_ffi.mjs", "clear_test_events")
 fn ffi_clear_test_events() -> Nil
+
+@external(erlang, "woof_ffi", "beam_event_log")
+@external(javascript, "./woof_ffi.mjs", "beam_event_log")
+fn ffi_beam_event_log(
+  level: Level,
+  message: String,
+  fields: List(#(String, FieldValue)),
+  namespace: Option(String),
+) -> Nil
