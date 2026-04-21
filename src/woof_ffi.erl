@@ -76,7 +76,8 @@ beam_log(Level, Message, Fields, Namespace, _Formatted) ->
         none         -> Meta0;
         {some, NS}   -> Meta0#{namespace => NS}
     end,
-    logger:log(Level, "~ts", [Message], Meta).
+    logger:log(Level, "~ts", [Message], Meta),
+    nil.
 
 %% Route a typed LogEvent through OTP logger with structured metadata.
 %% Fields are converted from Gleam FieldValue tuples to native Erlang terms.
