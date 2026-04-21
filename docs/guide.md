@@ -99,9 +99,16 @@ fn my_sink(event: woof.LogEvent) -> Nil {
 
 ### Legacy helpers
 
-`field`, `int_field`, `float_field`, `bool_field` are kept for backwards compatibility.
-Their call sites are unchanged; they now return `#(String, FieldValue)` instead of
-`#(String, String)`. Prefer the new names (`str`, `int`, `float`, `bool`) for new code.
+`field`, `int_field`, `float_field`, `bool_field` are **deprecated** as of v1.5.
+The Gleam compiler emits a warning at every call site.  They remain in the
+public API until v2.0; migration is mechanical:
+
+| Deprecated | Replacement |
+| :--- | :--- |
+| `field(key, val)` | `woof.str(key, val)` |
+| `int_field(key, val)` | `woof.int(key, val)` |
+| `float_field(key, val)` | `woof.float(key, val)` |
+| `bool_field(key, val)` | `woof.bool(key, val)` |
 
 ---
 
@@ -248,6 +255,61 @@ http |> woof.log(woof.Warning, "Slow response", [woof.int("ms", 1200)])
 ```
 
 In JSON output the namespace appears as the `"ns"` key.
+
+### Instanced logger context (v1.5)
+
+A logger can carry its own typed context - fields it attaches to every call:
+
+```gleam
+let db = woof.new("database")
+  |> woof.set_context([woof.str("component", "db"), woof.str("pool", "primary")])
+
+db |> woof.log(woof.Info,  "Connected",   [woof.str("host", "localhost")])
+db |> woof.log(woof.Error, "Query failed",[woof.int("code", 1045)])
+// Both events carry: component="db", pool="primary"
+```
+
+`set_context` replaces the entire context and returns a new `Logger` (loggers are
+immutable values). To add fields without losing what's already there, use
+`append_context`:
+
+```gleam
+let base = woof.new("api")
+  |> woof.set_context([woof.str("service", "api")])
+
+// Add per-request fields on top of the base context:
+let req = base |> woof.append_context([woof.str("request_id", id)])
+
+req |> woof.log(woof.Info, "Handling", [])
+// fields: service="api", request_id="abc123"
+```
+
+`set_context` to replace entirely, `append_context` to accumulate:
+
+```gleam
+let db = woof.new("db")
+  |> woof.set_context([woof.str("pool", "primary")])    // replace
+  |> woof.append_context([woof.str("region", "eu-w1")]) // add
+```
+
+Merge order across all context sources:
+
+```
+global context  →  scoped (with_context)  →  logger.context  →  inline fields
+```
+
+> **JavaScript async code** - instanced loggers are the recommended pattern on JS.
+> Because `with_context` uses a module-level variable, two concurrent Promise chains
+> can overwrite each other's context.  A logger value is just a record - pass it
+> around instead of relying on global state.
+>
+> ```gleam
+> // Instead of with_context in async code:
+> let ctx = woof.new("api") |> woof.set_context([woof.str("request_id", id)])
+> ctx |> woof.log(woof.Info, "Handling request", [])
+> await do_work(ctx)
+> ctx |> woof.log(woof.Info, "Done", [])
+> ```
 
 ---
 
@@ -469,6 +531,36 @@ fetch_user(id)
 Available: `tap_debug`, `tap_info`, `tap_notice`, `tap_warning`, `tap_error`,
 `tap_critical`, `tap_alert`, `tap_emergency`.
 
+### inspect (v1.5)
+
+Debug-log any Gleam value as its string representation, then return the value
+unchanged. Zero cost when Debug is disabled.
+
+```gleam
+fetch_user(id)
+|> woof.inspect("user")
+// [DEBUG] user  value="User(id: 42, name: \"alice\")"
+|> transform_user()
+```
+
+The field key is always `"value"`; the label becomes the log message.
+
+### tap_time (v1.5)
+
+Debug-log the current monotonic timestamp (integer milliseconds) as a
+`monotonic_ms` field, then pass the value through.  Place it at two points in
+a pipeline to see the wall-clock bracket in the log stream.
+
+```gleam
+pipeline_start
+|> woof.tap_time("before_query")    // monotonic_ms = 12345
+|> database.query()
+|> woof.tap_time("after_query")     // monotonic_ms = 12358  → 13 ms elapsed
+|> process_results()
+```
+
+Zero cost when Debug is disabled.
+
 ### log_error
 
 Log at Error level only when a `Result` is `Error`, then pass through unchanged:
@@ -488,7 +580,7 @@ use <- woof.time("db_query")
 database.query(sql)
 ```
 
-Emits an `Info` message `"db_query completed"` with a `duration_ms` field.
+Emits an `Info` message `"db_query completed"` with a `duration_ms: Int` field.
 Returns the block's return value unchanged.
 
 ---
@@ -511,6 +603,36 @@ woof.configure(woof.Config(
 woof.set_level(woof.Info)
 woof.set_format(woof.Json)
 woof.set_colors(woof.Never)
+```
+
+### Level from environment variable
+
+Read the log level from an env var at startup — common in OTP releases and containers:
+
+```gleam
+// Reads LOG_LEVEL, applies it; ignores missing/invalid values
+let _ = woof.set_level_from_env("LOG_LEVEL")
+
+// Or handle the result explicitly:
+case woof.set_level_from_env("LOG_LEVEL") {
+  Ok(Nil) -> Nil
+  Error(Nil) -> woof.set_level(woof.Info)  // fallback
+}
+```
+
+Parse a level name anywhere:
+
+```gleam
+woof.level_from_string("warning")  // Ok(Warning)
+woof.level_from_string("WARNING")  // Ok(Warning) — case-insensitive
+woof.level_from_string("warn")     // Error(Nil) — abbreviated names not accepted
+woof.level_from_string("verbose")  // Error(Nil) — unknown name
+```
+
+Read the active level programmatically:
+
+```gleam
+let current = woof.get_level()
 ```
 
 ---
@@ -661,6 +783,8 @@ behave identically on both targets.
 | Function | Signature | Description |
 | :--- | :--- | :--- |
 | `new` | `(String) -> Logger` | Create a namespaced logger |
+| `set_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Replace logger's instance context |
+| `append_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Add fields to instance context |
 | `log` | `(Logger, Level, String, List(#(String, FieldValue))) -> Nil` | Log through a namespace |
 
 ### Field constructors
@@ -682,6 +806,9 @@ behave identically on both targets.
 | :--- | :--- | :--- |
 | `configure` | `(Config) -> Nil` | Set level + format + colors at once |
 | `set_level` | `(Level) -> Nil` | Change minimum log level |
+| `get_level` | `() -> Level` | Read current minimum log level |
+| `level_from_string` | `(String) -> Result(Level, Nil)` | Parse level name (case-insensitive) |
+| `set_level_from_env` | `(String) -> Result(Nil, Nil)` | Read level from env var and apply |
 | `set_format` | `(Format) -> Nil` | Change output format |
 | `set_colors` | `(ColorMode) -> Nil` | Change color mode |
 | `is_enabled` | `(Level) -> Bool` | Check if a level is active |
@@ -716,9 +843,11 @@ behave identically on both targets.
 | Function | Description |
 | :--- | :--- |
 | `tap_debug` / `tap_info` / `tap_notice` / `tap_warning` / `tap_error` | Log and pass value through |
-| `tap_critical` / `tap_alert` / `tap_emergency` | Log and pass value through (new levels) |
+| `tap_critical` / `tap_alert` / `tap_emergency` | Log and pass value through |
+| `inspect(value, label) -> a` | Debug-log string repr of value, return value |
+| `tap_time(value, label) -> a` | Debug-log `monotonic_ms` as Int, return value |
 | `log_error` | Log on `Result` `Error`, pass through |
-| `time` | Measure and log block duration |
+| `time` | Measure and log block duration as `duration_ms: Int` |
 
 ### Utilities
 
