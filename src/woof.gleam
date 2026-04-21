@@ -128,9 +128,17 @@ pub type Entry {
   )
 }
 
-/// A tiny object holding a namespace for namespaced logs.
+/// A namespaced logger that optionally carries its own per-instance context.
+///
+/// Create with `woof.new("name")`.  Attach context with `woof.set_context`.
+/// Context fields appear after global and scoped context, before inline fields.
+///
+/// ```gleam
+/// let db = woof.new("database") |> woof.set_context([woof.str("pool", "ro")])
+/// db |> woof.log(woof.Info, "query ok", [woof.int("ms", 12)])
+/// ```
 pub opaque type Logger {
-  Logger(namespace: String)
+  Logger(namespace: Option(String), context: List(#(String, FieldValue)))
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +183,55 @@ pub fn set_level(level: Level) -> Nil {
 pub fn is_enabled(level: Level) -> Bool {
   let state = read_state()
   should_log(level, state.level)
+}
+
+/// Return the current minimum log level.
+pub fn get_level() -> Level {
+  let state = read_state()
+  state.level
+}
+
+/// Parse a level name string (case-insensitive) into a `Level`.
+///
+/// Accepts the eight OTP level names: `"debug"`, `"info"`, `"notice"`,
+/// `"warning"`, `"error"`, `"critical"`, `"alert"`, `"emergency"`.
+/// Returns `Error(Nil)` for any unrecognised string.
+///
+/// ```gleam
+/// woof.level_from_string("warning")  // Ok(Warning)
+/// woof.level_from_string("WARN")     // Error(Nil)
+/// ```
+pub fn level_from_string(s: String) -> Result(Level, Nil) {
+  let level = case string.lowercase(s) {
+    "debug" -> Some(Debug)
+    "info" -> Some(Info)
+    "notice" -> Some(Notice)
+    "warning" -> Some(Warning)
+    "error" -> Some(Error)
+    "critical" -> Some(Critical)
+    "alert" -> Some(Alert)
+    "emergency" -> Some(Emergency)
+    _ -> None
+  }
+  option.to_result(level, Nil)
+}
+
+/// Read a log level from an environment variable and apply it.
+///
+/// Returns `Ok(Nil)` if the variable is set and its value is a recognised
+/// level name (case-insensitive).  Returns `Error(Nil)` if the variable is
+/// absent or its value is not a valid level name; in that case the current
+/// level is unchanged.
+///
+/// ```gleam
+/// // In your application startup:
+/// let _ = woof.set_level_from_env("LOG_LEVEL")
+/// ```
+pub fn set_level_from_env(var: String) -> Result(Nil, Nil) {
+  use val <- result.try(ffi_get_env(var))
+  use level <- result.try(level_from_string(val))
+  set_level(level)
+  Ok(Nil)
 }
 
 /// Set the output format.
@@ -468,17 +525,47 @@ pub fn emergency_lazy(
 /// The namespace is prepended to every message formatted with `Text` and
 /// included as a `"ns"` field in `Json` output.
 pub fn new(namespace: String) -> Logger {
-  Logger(namespace: namespace)
+  Logger(namespace: Some(namespace), context: [])
+}
+
+/// Attach per-instance context fields to a logger.
+///
+/// Context fields appear after global and scoped context, before inline fields.
+/// Each call to `set_context` replaces the previous context.
+///
+/// ```gleam
+/// let db = woof.new("database") |> woof.set_context([woof.str("pool", "ro")])
+/// ```
+pub fn set_context(logger: Logger, fields: List(#(String, FieldValue))) -> Logger {
+  Logger(..logger, context: fields)
+}
+
+/// Append fields to a logger's instance context without replacing it.
+///
+/// Unlike `set_context`, which replaces the entire context, `append_context`
+/// adds fields at the end of the existing list. Returns a new `Logger`.
+///
+/// ```gleam
+/// let base = woof.new("api") |> woof.set_context([woof.str("service", "api")])
+/// let req  = base |> woof.append_context([woof.str("request_id", id)])
+/// ```
+pub fn append_context(
+  logger: Logger,
+  fields: List(#(String, FieldValue)),
+) -> Logger {
+  Logger(..logger, context: list.append(logger.context, fields))
 }
 
 /// Log a message through a namespaced logger.
+///
+/// Logger context fields (set via `set_context`) are prepended to inline fields.
 pub fn log(
   logger: Logger,
   level: Level,
   message: String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit(level, message, fields, Some(logger.namespace))
+  emit(level, message, list.append(logger.context, fields), logger.namespace)
 }
 
 // ---------------------------------------------------------------------------
@@ -529,28 +616,32 @@ pub fn bool(key: String, value: Bool) -> #(String, FieldValue) {
 
 /// Create a string field.
 ///
-/// Prefer `woof.str` - this alias is kept for backwards compatibility.
+/// Prefer `woof.str` — this alias is kept for backwards compatibility.
+@deprecated("Use woof.str instead")
 pub fn field(key: String, value: String) -> #(String, FieldValue) {
   str(key, value)
 }
 
 /// Create a field from an `Int`.
 ///
-/// Prefer `woof.int` - this alias is kept for backwards compatibility.
+/// Prefer `woof.int` — this alias is kept for backwards compatibility.
+@deprecated("Use woof.int instead")
 pub fn int_field(key: String, value: Int) -> #(String, FieldValue) {
   int(key, value)
 }
 
 /// Create a field from a `Float`.
 ///
-/// Prefer `woof.float` - this alias is kept for backwards compatibility.
+/// Prefer `woof.float` — this alias is kept for backwards compatibility.
+@deprecated("Use woof.float instead")
 pub fn float_field(key: String, value: Float) -> #(String, FieldValue) {
   float(key, value)
 }
 
 /// Create a field from a `Bool`.
 ///
-/// Prefer `woof.bool` - this alias is kept for backwards compatibility.
+/// Prefer `woof.bool` — this alias is kept for backwards compatibility.
+@deprecated("Use woof.bool instead")
 pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
   bool(key, value)
 }
@@ -698,9 +789,9 @@ pub fn log_error(
   message: String,
   fields: List(#(String, FieldValue)),
 ) -> Result(a, b) {
-  case result.is_ok(res) {
-    True -> res
-    False -> {
+  case res {
+    Ok(_) -> res
+    _ -> {
       error(message, fields)
       res
     }
@@ -718,7 +809,39 @@ pub fn time(label: String, body: fn() -> a) -> a {
   let start = ffi_monotonic_now()
   let value = body()
   let elapsed = ffi_monotonic_now() - start
-  info(label <> " completed", [str("duration_ms", gleam_int.to_string(elapsed))])
+  info(label <> " completed", [int("duration_ms", elapsed)])
+  value
+}
+
+/// Log the current monotonic timestamp at Debug level and pass the value through.
+///
+/// Insert at multiple points in a pipeline to measure elapsed time between steps.
+/// Each call emits a `monotonic_ms` field — diff adjacent values for duration.
+///
+/// ```gleam
+/// fetch_data()
+/// |> woof.tap_time("after fetch")
+/// |> transform()
+/// |> woof.tap_time("after transform")
+/// ```
+pub fn tap_time(value: a, label: String) -> a {
+  let ms = ffi_monotonic_now()
+  debug(label, [int("monotonic_ms", ms)])
+  value
+}
+
+/// Log the string representation of a value at Debug level and pass it through.
+///
+/// Useful for inspecting intermediate values in pipelines without breaking
+/// the chain.  The value is rendered via `string.inspect`.
+///
+/// ```gleam
+/// compute()
+/// |> woof.inspect("result before filter")
+/// |> list.filter(fn(x) { x > 0 })
+/// ```
+pub fn inspect(value: a, label: String) -> a {
+  debug(label, [str("value", string.inspect(value))])
   value
 }
 
