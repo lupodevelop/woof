@@ -1524,3 +1524,314 @@ fn test_event_get_int_field(
   event: Dynamic,
   field_name: String,
 ) -> Result(Int, Nil)
+
+// ---------------------------------------------------------------------------
+// v1.5 — inspect helper
+// ---------------------------------------------------------------------------
+
+pub fn inspect_returns_value_unchanged_test() {
+  let result = woof.inspect(42, "answer")
+  result |> should.equal(42)
+}
+
+pub fn inspect_logs_at_debug_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.inspect(#(1, "hello"), "pair")
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Debug)
+  event.message |> should.equal("pair")
+
+  reset()
+}
+
+pub fn inspect_field_contains_string_repr_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.inspect([1, 2, 3], "list")
+
+  let assert [event] = get()
+  let assert [#("value", woof.FString(repr))] = event.fields
+  repr |> string.contains("1") |> should.be_true
+  repr |> string.contains("2") |> should.be_true
+
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — tap_time helper
+// ---------------------------------------------------------------------------
+
+pub fn tap_time_returns_value_unchanged_test() {
+  reset()
+  let result = woof.tap_time(99, "checkpoint")
+  result |> should.equal(99)
+  reset()
+}
+
+pub fn tap_time_logs_at_debug_with_monotonic_field_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.tap_time("pipeline step", "checkpoint")
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Debug)
+  event.message |> should.equal("checkpoint")
+  let assert [#("monotonic_ms", woof.FInt(_))] = event.fields
+
+  reset()
+}
+
+pub fn tap_time_skips_when_debug_disabled_test() {
+  reset()
+  woof.set_level(woof.Info)
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.tap_time("ignored", "label")
+
+  get() |> list.length |> should.equal(0)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — instanced Logger with context
+// ---------------------------------------------------------------------------
+
+pub fn logger_set_context_carries_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log =
+    woof.new("api")
+    |> woof.set_context([woof.str("version", "2"), woof.str("env", "prod")])
+
+  log |> woof.log(woof.Info, "request", [])
+
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("api"))
+  event.fields
+  |> should.equal([
+    #("version", woof.FString("2")),
+    #("env", woof.FString("prod")),
+  ])
+
+  reset()
+}
+
+pub fn logger_context_merges_before_inline_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("svc") |> woof.set_context([woof.str("region", "eu")])
+
+  log |> woof.log(woof.Debug, "ping", [woof.int("ms", 5)])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("region", woof.FString("eu")),
+    #("ms", woof.FInt(5)),
+  ])
+
+  reset()
+}
+
+pub fn logger_context_merges_with_global_context_test() {
+  reset()
+  woof.set_global_context([woof.str("app", "woof")])
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("db") |> woof.set_context([woof.str("pool", "rw")])
+  log |> woof.log(woof.Info, "query", [woof.bool("cached", True)])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("app", woof.FString("woof")),
+    #("pool", woof.FString("rw")),
+    #("cached", woof.FBool(True)),
+  ])
+
+  reset()
+}
+
+pub fn logger_set_context_replaces_previous_context_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log =
+    woof.new("svc")
+    |> woof.set_context([woof.str("a", "1")])
+    |> woof.set_context([woof.str("b", "2")])
+
+  log |> woof.log(woof.Debug, "replaced", [])
+
+  let assert [event] = get()
+  event.fields |> should.equal([#("b", woof.FString("2"))])
+
+  reset()
+}
+
+pub fn logger_without_context_behaves_as_before_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("legacy")
+  log |> woof.log(woof.Warning, "msg", [woof.str("k", "v")])
+
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("legacy"))
+  event.fields |> should.equal([#("k", woof.FString("v"))])
+
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — level_from_string
+// ---------------------------------------------------------------------------
+
+pub fn level_from_string_known_levels_test() {
+  woof.level_from_string("debug") |> should.equal(Ok(woof.Debug))
+  woof.level_from_string("info") |> should.equal(Ok(woof.Info))
+  woof.level_from_string("notice") |> should.equal(Ok(woof.Notice))
+  woof.level_from_string("warning") |> should.equal(Ok(woof.Warning))
+  woof.level_from_string("error") |> should.equal(Ok(woof.Error))
+  woof.level_from_string("critical") |> should.equal(Ok(woof.Critical))
+  woof.level_from_string("alert") |> should.equal(Ok(woof.Alert))
+  woof.level_from_string("emergency") |> should.equal(Ok(woof.Emergency))
+}
+
+pub fn level_from_string_case_insensitive_test() {
+  woof.level_from_string("DEBUG") |> should.equal(Ok(woof.Debug))
+  woof.level_from_string("Warning") |> should.equal(Ok(woof.Warning))
+  woof.level_from_string("ERROR") |> should.equal(Ok(woof.Error))
+}
+
+pub fn level_from_string_unknown_returns_error_test() {
+  woof.level_from_string("verbose") |> should.equal(Error(Nil))
+  woof.level_from_string("") |> should.equal(Error(Nil))
+  woof.level_from_string("warn") |> should.equal(Error(Nil))
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — get_level
+// ---------------------------------------------------------------------------
+
+pub fn get_level_returns_current_level_test() {
+  reset()
+  woof.set_level(woof.Warning)
+  woof.get_level() |> should.equal(woof.Warning)
+  reset()
+}
+
+pub fn get_level_reflects_configure_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Critical,
+    format: woof.Text,
+    colors: woof.Never,
+  ))
+  woof.get_level() |> should.equal(woof.Critical)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — set_level_from_env
+// ---------------------------------------------------------------------------
+
+pub fn set_level_from_env_missing_var_returns_error_test() {
+  reset()
+  // Env var WOOF_TEST_MISSING_XYZ is guaranteed not set
+  woof.set_level_from_env("WOOF_TEST_MISSING_XYZ") |> should.equal(Error(Nil))
+  // Level unchanged
+  woof.get_level() |> should.equal(woof.Debug)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — append_context on Logger
+// ---------------------------------------------------------------------------
+
+pub fn append_context_adds_fields_to_empty_context_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("svc") |> woof.append_context([woof.str("a", "1")])
+  log |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  event.fields |> should.equal([#("a", woof.FString("1"))])
+  reset()
+}
+
+pub fn append_context_appends_to_existing_context_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log =
+    woof.new("svc")
+    |> woof.set_context([woof.str("a", "1")])
+    |> woof.append_context([woof.str("b", "2")])
+
+  log |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([#("a", woof.FString("1")), #("b", woof.FString("2"))])
+  reset()
+}
+
+pub fn append_context_does_not_replace_existing_context_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log =
+    woof.new("svc")
+    |> woof.set_context([woof.str("original", "yes")])
+    |> woof.append_context([woof.str("extra", "also")])
+
+  log |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  // Both fields present — set_context not clobbered
+  event.fields
+  |> should.equal([
+    #("original", woof.FString("yes")),
+    #("extra", woof.FString("also")),
+  ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.5 — time() emits typed FInt field (bug fix verification)
+// ---------------------------------------------------------------------------
+
+pub fn time_emits_int_duration_field_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.time("op", fn() { Nil })
+
+  let assert [event] = get()
+  event.message |> string.starts_with("op completed") |> should.be_true
+  let assert [#("duration_ms", woof.FInt(_))] = event.fields
+
+  reset()
+}
