@@ -536,7 +536,10 @@ pub fn new(namespace: String) -> Logger {
 /// ```gleam
 /// let db = woof.new("database") |> woof.set_context([woof.str("pool", "ro")])
 /// ```
-pub fn set_context(logger: Logger, fields: List(#(String, FieldValue))) -> Logger {
+pub fn set_context(
+  logger: Logger,
+  fields: List(#(String, FieldValue)),
+) -> Logger {
   Logger(..logger, context: fields)
 }
 
