@@ -1,4 +1,6 @@
-> ℹ️ **v1.4** adds 4 new OTP levels (`Notice`, `Critical`, `Alert`, `Emergency`), `beam_event_sink`, multi-sink dispatch, and `dev()`/`prod()` presets. No breaking changes.
+> ℹ️ **v1.5** adds instanced logger context, `inspect`, `tap_time`, `level_from_string`, `set_level_from_env`, `get_level`, `append_context`, and soft deprecation warnings for legacy field helpers. No breaking changes.
+>
+> ℹ️ **v1.4** adds 4 new OTP levels (`Notice`, `Critical`, `Alert`, `Emergency`), `beam_event_sink`, multi-sink dispatch, and `dev()`/`prod()` presets.
 >
 > ⚠️ **v1.3 breaking change:** fields changed from `List(#(String, String))` to `List(#(String, FieldValue))`. See [docs/migration_v1_3.md](docs/migration_v1_3.md).
 
@@ -94,6 +96,47 @@ Or wire up sinks explicitly:
 ```gleam
 woof.set_sinks([woof.beam_logger_sink, my_metrics_sink])
 woof.set_event_sink(woof.beam_event_sink) // structured typed fields to OTP
+```
+
+## Instanced loggers with context
+
+Pass a fixed set of fields through a logger instance - no global state needed:
+
+```gleam
+let db = woof.new("database") |> woof.set_context([woof.str("component", "db")])
+db |> woof.log(woof.Info, "Connected", [woof.str("host", "localhost")])
+// → namespace: "database", fields: component="db", host="localhost"
+```
+
+Ideal for JS async code where global context is unreliable.
+
+## Debugging helpers
+
+```gleam
+fetch_user(id)
+|> woof.inspect("user")          // logs string repr at Debug, passes value through
+|> woof.tap_time("after_fetch")  // logs monotonic_ms as Int field at Debug
+|> transform()
+```
+
+## Level from environment variable
+
+```gleam
+pub fn main() {
+  let _ = woof.set_level_from_env("LOG_LEVEL")  // reads LOG_LEVEL, falls back silently
+  // ...
+}
+```
+
+```sh
+LOG_LEVEL=warning ./my_app   # sets Warning level at startup
+```
+
+Parse or inspect the level anywhere:
+
+```gleam
+woof.level_from_string("critical")  // Ok(Critical)
+woof.get_level()                    // current Level
 ```
 
 ## Documentation
