@@ -1841,8 +1841,7 @@ pub fn child_inherits_parent_context_test() {
   let #(sink, get) = woof.test_sink()
   woof.set_event_sink(sink)
 
-  let parent =
-    woof.new("svc") |> woof.set_context([woof.str("env", "prod")])
+  let parent = woof.new("svc") |> woof.set_context([woof.str("env", "prod")])
   let kid = woof.child(parent, "db")
 
   kid |> woof.log(woof.Info, "msg", [])
@@ -1877,8 +1876,7 @@ pub fn child_does_not_mutate_parent_test() {
   let #(sink, get) = woof.test_sink()
   woof.set_event_sink(sink)
 
-  let parent =
-    woof.new("svc") |> woof.set_context([woof.str("a", "1")])
+  let parent = woof.new("svc") |> woof.set_context([woof.str("a", "1")])
   let _ = woof.child(parent, "child")
 
   // Parent unchanged
