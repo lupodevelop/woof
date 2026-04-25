@@ -3,6 +3,53 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-04-25
+
+### Added
+
+- **`child(Logger, String) -> Logger`** - create a sub-namespace logger that
+  inherits the parent's context.  The child namespace is the parent namespace
+  joined with `.`:
+
+  ```gleam
+  let http   = woof.new("http")
+  let router = woof.child(http, "router")   // namespace: "http.router"
+  let get    = woof.child(router, "GET")    // namespace: "http.router.GET"
+  ```
+
+  Loggers are immutable. Mutating the child does not affect the parent.
+
+- **`filter_event_sink(fn(LogEvent) -> Bool, EventSink) -> EventSink`** - wrap
+  an `EventSink` with a predicate.  Events for which the predicate returns
+  `True` are forwarded; the rest are dropped.
+
+  ```gleam
+  woof.set_event_sink(woof.filter_event_sink(
+    fn(e) { woof.level_to_int(e.level) >= woof.level_to_int(woof.Error) },
+    pagerduty_sink,
+  ))
+  ```
+
+- **`emit(LogEvent) -> Nil`** - dispatch a pre-built `LogEvent` through every
+  registered sink.  Does not merge global / scoped context (the event is
+  delivered as supplied) and does not enforce the current minimum level.
+  Useful for bridging from external logging systems and for replaying captured
+  events in tests.
+
+  ```gleam
+  woof.emit(woof.LogEvent(
+    level: woof.Warning,
+    message: "replayed",
+    fields: [woof.str("origin", "external")],
+    timestamp: ts,
+    namespace: None,
+  ))
+  ```
+
+- **`level_to_int(Level) -> Int`** - now public.  Maps each `Level` to its OTP /
+  syslog ordinal (0..7).  Required for writing comparison predicates inside
+  `filter_event_sink`, since Gleam custom types don't support `>=` directly.
+
 ## [1.5.0] - 2026-04-21
 
 ### Added
@@ -287,7 +334,7 @@ They remain in the public API until v2.0:
 ### Added
 
 - Initial public release of the `woof` logging library for Gleam. Dedicated to Echo the dog.
-- Zero‑configuration API with four severity levels (`debug`, `info`,
+- Zero-configuration API with four severity levels (`debug`, `info`,
   `warning`, `error`).
 - Structured logging using simple `#(String, String)` tuples and helper
   constructors (`field`, `int_field`, `float_field`, `bool_field`).
@@ -299,10 +346,10 @@ They remain in the public API until v2.0:
 - Lazy logging variants (`*_lazy`), pipeline helpers (`tap_*`, `log_error`,
   `time`), and convenience configuration functions (`configure`, `set_level`,
   `set_format`, `set_colors`).
-- Cross‑platform support: identical behaviour on BEAM and JavaScript targets.
-- Comprehensive test suite (34 tests) and detailed documentation in README and
-  project reference.
+- Cross-platform support: identical behaviour on BEAM and JavaScript targets.
+- Test suite (34 tests) and documentation in README and project reference.
 
+[1.6.0]: https://hex.pm/packages/woof/1.6.0
 [1.5.0]: https://hex.pm/packages/woof/1.5.0
 [1.4.0]: https://hex.pm/packages/woof/1.4.0
 [1.3.0]: https://hex.pm/packages/woof/1.3.0

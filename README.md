@@ -1,4 +1,6 @@
-> ℹ️ **v1.5** adds instanced logger context, `inspect`, `tap_time`, `level_from_string`, `set_level_from_env`, `get_level`, `append_context`, and soft deprecation warnings for legacy field helpers. No breaking changes.
+> ℹ️ **v1.6** adds `child` loggers, `filter_event_sink`, public `emit(LogEvent)`, and public `level_to_int`. No breaking changes.
+>
+> ℹ️ **v1.5** adds instanced logger context, `inspect`, `tap_time`, `level_from_string`, `set_level_from_env`, `get_level`, `append_context`, and soft deprecation warnings for legacy field helpers.
 >
 > ℹ️ **v1.4** adds 4 new OTP levels (`Notice`, `Critical`, `Alert`, `Emergency`), `beam_event_sink`, multi-sink dispatch, and `dev()`/`prod()` presets.
 >
@@ -108,7 +110,25 @@ db |> woof.log(woof.Info, "Connected", [woof.str("host", "localhost")])
 // → namespace: "database", fields: component="db", host="localhost"
 ```
 
+Build hierarchies with `child` (inherits parent context, dot-joined namespace):
+
+```gleam
+let http   = woof.new("http")
+let router = woof.child(http, "router")   // namespace: "http.router"
+```
+
 Ideal for JS async code where global context is unreliable.
+
+## Selective sink routing
+
+Wrap a sink with a predicate to send only matching events somewhere:
+
+```gleam
+woof.set_event_sink(woof.filter_event_sink(
+  fn(e) { woof.level_to_int(e.level) >= woof.level_to_int(woof.Error) },
+  pagerduty_sink,
+))
+```
 
 ## Debugging helpers
 
@@ -145,6 +165,7 @@ woof.get_level()                    // current Level
 | :--- | :--- |
 | [docs/guide.md](docs/guide.md) | Full reference: levels, formats, sinks, context, BEAM integration, API table |
 | [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 - what changed and how to fix it |
+| [roadmap.md](roadmap.md) | Future releases v1.7 to v2.0 |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [hexdocs.pm/woof](https://hexdocs.pm/woof/) | Generated module reference |
 

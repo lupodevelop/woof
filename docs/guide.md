@@ -292,6 +292,35 @@ let db = woof.new("db")
   |> woof.append_context([woof.str("region", "eu-w1")]) // add
 ```
 
+### Child loggers (v1.6)
+
+Build hierarchies of loggers. Children inherit the parent's context and add
+a dot-separated suffix to the parent's namespace:
+
+```gleam
+let http   = woof.new("http")
+let router = woof.child(http, "router")   // namespace: "http.router"
+let get    = woof.child(router, "GET")    // namespace: "http.router.GET"
+
+get |> woof.log(woof.Info, "Handling /users", [])
+// [INFO] 10:30:45 http.router.GET: Handling /users
+```
+
+Children inherit the parent's context at creation time:
+
+```gleam
+let api = woof.new("api")
+  |> woof.set_context([woof.str("service", "api"), woof.str("env", "prod")])
+
+let users = woof.child(api, "users")
+// users carries: service="api", env="prod"
+
+users |> woof.append_context([woof.str("endpoint", "/users")])
+// users now carries: service, env, endpoint. api still carries only service+env
+```
+
+Loggers are immutable values. `child(parent, ...)` never mutates `parent`.
+
 Merge order across all context sources:
 
 ```
@@ -422,6 +451,52 @@ woof.set_event_sink(fn(event: woof.LogEvent) {
 
 Both channels (legacy + event) fire independently on every emit. Remove with
 `clear_event_sink()`.
+
+### Filtering an event sink (v1.6)
+
+`filter_event_sink(predicate, sink)` wraps an `EventSink` so only events for
+which `predicate(event)` returns `True` are forwarded. Selective routing
+without writing a full custom sink:
+
+```gleam
+// Send only Error+ events to PagerDuty:
+woof.set_event_sink(woof.filter_event_sink(
+  fn(e) { woof.level_to_int(e.level) >= woof.level_to_int(woof.Error) },
+  pagerduty_sink,
+))
+
+// Send only events from a specific namespace to a metrics pipeline:
+woof.set_event_sink(woof.filter_event_sink(
+  fn(e) { e.namespace == Some("payments") },
+  metrics_sink,
+))
+```
+
+`level_to_int(Level) -> Int` exposes the OTP / syslog ordinal (Debug=0..Emergency=7)
+since Gleam custom types don't support `>=` directly.
+
+### Emitting a pre-built `LogEvent` (v1.6)
+
+`emit(LogEvent) -> Nil` dispatches a pre-built event through every registered
+sink. Useful for bridging from external logging systems and replaying captured
+events in tests.
+
+```gleam
+woof.emit(woof.LogEvent(
+  level: woof.Warning,
+  message: "replayed from external log",
+  fields: [woof.str("origin", "datadog")],
+  timestamp: ts,
+  namespace: Some("bridge"),
+))
+```
+
+Important differences from level-tagged shortcuts (`info`, `error`, ...):
+
+- **No context merging.** The event is delivered as supplied; global / scoped
+  context is *not* prepended.
+- **No level filter.** The current minimum level is not enforced. The caller
+  has already decided to emit. To honour the filter, guard with `is_enabled`.
 
 ### `beam_event_sink` - structured OTP logging
 
@@ -607,7 +682,7 @@ woof.set_colors(woof.Never)
 
 ### Level from environment variable
 
-Read the log level from an env var at startup — common in OTP releases and containers:
+Read the log level from an env var at startup, common in OTP releases and containers:
 
 ```gleam
 // Reads LOG_LEVEL, applies it; ignores missing/invalid values
@@ -624,9 +699,9 @@ Parse a level name anywhere:
 
 ```gleam
 woof.level_from_string("warning")  // Ok(Warning)
-woof.level_from_string("WARNING")  // Ok(Warning) — case-insensitive
-woof.level_from_string("warn")     // Error(Nil) — abbreviated names not accepted
-woof.level_from_string("verbose")  // Error(Nil) — unknown name
+woof.level_from_string("WARNING")  // Ok(Warning), case-insensitive
+woof.level_from_string("warn")     // Error(Nil), abbreviated names not accepted
+woof.level_from_string("verbose")  // Error(Nil), unknown name
 ```
 
 Read the active level programmatically:
@@ -783,6 +858,7 @@ behave identically on both targets.
 | Function | Signature | Description |
 | :--- | :--- | :--- |
 | `new` | `(String) -> Logger` | Create a namespaced logger |
+| `child` | `(Logger, String) -> Logger` | Sub-namespace logger inheriting parent context |
 | `set_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Replace logger's instance context |
 | `append_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Add fields to instance context |
 | `log` | `(Logger, Level, String, List(#(String, FieldValue))) -> Nil` | Log through a namespace |
@@ -821,6 +897,8 @@ behave identically on both targets.
 | `set_sinks` | `(List(Sink)) -> Nil` | Register multiple legacy sinks |
 | `set_event_sink` | `(EventSink) -> Nil` | Register typed sink `fn(LogEvent) -> Nil` |
 | `clear_event_sink` | `() -> Nil` | Remove the typed event sink |
+| `filter_event_sink` | `(fn(LogEvent) -> Bool, EventSink) -> EventSink` | Wrap an event sink with a predicate |
+| `emit` | `(LogEvent) -> Nil` | Dispatch a pre-built event to all sinks (no context merge, no level filter) |
 | `default_sink` | `Sink` | Prints to stdout (default) |
 | `beam_logger_sink` | `Sink` | Routes through OTP logger / console.* |
 | `beam_event_sink` | `EventSink` | Structured typed fields to OTP logger |
@@ -855,3 +933,4 @@ behave identically on both targets.
 | :--- | :--- |
 | `format(Entry, Format) -> String` | Format an `Entry` without emitting |
 | `level_name(Level) -> String` | `Warning` → `"warning"` |
+| `level_to_int(Level) -> Int` | `Warning` → `3` (OTP / syslog ordinal) |

@@ -280,6 +280,70 @@ pub fn clear_event_sink() -> Nil {
   write_state(State(..state, event_sink: None))
 }
 
+/// Wrap an `EventSink` with a predicate.
+///
+/// Events for which `predicate(event)` is `True` are forwarded to the wrapped
+/// sink; the rest are dropped.  Enables selective routing without writing a
+/// full custom sink.
+///
+/// ```gleam
+/// // Route Error+ events to PagerDuty:
+/// woof.set_event_sink(woof.filter_event_sink(
+///   fn(e) { woof.level_to_int(e.level) >= woof.level_to_int(woof.Error) },
+///   pagerduty_sink,
+/// ))
+/// ```
+pub fn filter_event_sink(
+  predicate: fn(LogEvent) -> Bool,
+  sink: EventSink,
+) -> EventSink {
+  fn(event: LogEvent) -> Nil {
+    case predicate(event) {
+      True -> sink(event)
+      False -> Nil
+    }
+  }
+}
+
+/// Dispatch a pre-built `LogEvent` through every registered sink.
+///
+/// Unlike the level-tagged shortcuts (`info`, `error`, ...), `emit` does not
+/// merge global or scoped context: the event is delivered exactly as supplied.
+/// The current minimum level is *not* enforced - the caller has already
+/// decided to emit.
+///
+/// Useful for bridging from external logging systems and replaying captured
+/// events in tests.
+///
+/// ```gleam
+/// let event = woof.LogEvent(
+///   level: woof.Warning,
+///   message: "replayed",
+///   fields: [woof.str("origin", "external")],
+///   timestamp: woof_now(),
+///   namespace: None,
+/// )
+/// woof.emit(event)
+/// ```
+pub fn emit(event: LogEvent) -> Nil {
+  let state = read_state()
+  let string_fields = fields_to_strings(event.fields)
+  let entry =
+    Entry(
+      level: event.level,
+      message: event.message,
+      fields: string_fields,
+      namespace: event.namespace,
+      timestamp: event.timestamp,
+    )
+  let formatted = format_entry(entry, state.format, state.colors)
+  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
+  case state.event_sink {
+    None -> Nil
+    Some(event_sink_fn) -> event_sink_fn(event)
+  }
+}
+
 /// The default sink - prints the formatted log line to standard output.
 ///
 /// This is the out-of-the-box behaviour: zero configuration, beautiful
@@ -405,45 +469,45 @@ pub fn test_sink() -> #(EventSink, fn() -> List(LogEvent)) {
 
 /// Log at Debug level.
 pub fn debug(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Debug, message, fields, None)
+  do_log(Debug, message, fields, None)
 }
 
 /// Log at Info level.
 pub fn info(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Info, message, fields, None)
+  do_log(Info, message, fields, None)
 }
 
 /// Log at Warning level.
 pub fn warning(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Warning, message, fields, None)
+  do_log(Warning, message, fields, None)
 }
 
 /// Log at Error level.
 pub fn error(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Error, message, fields, None)
+  do_log(Error, message, fields, None)
 }
 
 /// Log at Notice level.  Use for significant business events that are not
 /// errors - successful deployments, config reloads, scheduled task completions.
 pub fn notice(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Notice, message, fields, None)
+  do_log(Notice, message, fields, None)
 }
 
 /// Log at Critical level.  Use when the system is partially degraded and
 /// immediate investigation is required.
 pub fn critical(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Critical, message, fields, None)
+  do_log(Critical, message, fields, None)
 }
 
 /// Log at Alert level.  Use when automatic action is insufficient and a
 /// human must intervene right away.
 pub fn alert(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Alert, message, fields, None)
+  do_log(Alert, message, fields, None)
 }
 
 /// Log at Emergency level.  Use when the system is completely unusable.
 pub fn emergency(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  emit(Emergency, message, fields, None)
+  do_log(Emergency, message, fields, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +592,26 @@ pub fn new(namespace: String) -> Logger {
   Logger(namespace: Some(namespace), context: [])
 }
 
+/// Create a child logger that inherits the parent's context and appends a
+/// dot-separated suffix to the parent's namespace.
+///
+/// ```gleam
+/// let http   = woof.new("http")
+/// let router = woof.child(http, "router")   // namespace: "http.router"
+/// let get    = woof.child(router, "GET")    // namespace: "http.router.GET"
+/// ```
+///
+/// Loggers are immutable - mutating the child via `set_context` /
+/// `append_context` does not affect the parent.  If the parent has no
+/// namespace, the child uses the suffix as its full namespace.
+pub fn child(parent: Logger, suffix: String) -> Logger {
+  let namespace = case parent.namespace {
+    None -> Some(suffix)
+    Some(parent_ns) -> Some(parent_ns <> "." <> suffix)
+  }
+  Logger(namespace: namespace, context: parent.context)
+}
+
 /// Attach per-instance context fields to a logger.
 ///
 /// Context fields appear after global and scoped context, before inline fields.
@@ -568,7 +652,7 @@ pub fn log(
   message: String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit(level, message, list.append(logger.context, fields), logger.namespace)
+  do_log(level, message, list.append(logger.context, fields), logger.namespace)
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +703,7 @@ pub fn bool(key: String, value: Bool) -> #(String, FieldValue) {
 
 /// Create a string field.
 ///
-/// Prefer `woof.str` — this alias is kept for backwards compatibility.
+/// Prefer `woof.str`. This alias is kept for backwards compatibility.
 @deprecated("Use woof.str instead")
 pub fn field(key: String, value: String) -> #(String, FieldValue) {
   str(key, value)
@@ -627,7 +711,7 @@ pub fn field(key: String, value: String) -> #(String, FieldValue) {
 
 /// Create a field from an `Int`.
 ///
-/// Prefer `woof.int` — this alias is kept for backwards compatibility.
+/// Prefer `woof.int`. This alias is kept for backwards compatibility.
 @deprecated("Use woof.int instead")
 pub fn int_field(key: String, value: Int) -> #(String, FieldValue) {
   int(key, value)
@@ -635,7 +719,7 @@ pub fn int_field(key: String, value: Int) -> #(String, FieldValue) {
 
 /// Create a field from a `Float`.
 ///
-/// Prefer `woof.float` — this alias is kept for backwards compatibility.
+/// Prefer `woof.float`. This alias is kept for backwards compatibility.
 @deprecated("Use woof.float instead")
 pub fn float_field(key: String, value: Float) -> #(String, FieldValue) {
   float(key, value)
@@ -643,7 +727,7 @@ pub fn float_field(key: String, value: Float) -> #(String, FieldValue) {
 
 /// Create a field from a `Bool`.
 ///
-/// Prefer `woof.bool` — this alias is kept for backwards compatibility.
+/// Prefer `woof.bool`. This alias is kept for backwards compatibility.
 @deprecated("Use woof.bool instead")
 pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
   bool(key, value)
@@ -819,7 +903,7 @@ pub fn time(label: String, body: fn() -> a) -> a {
 /// Log the current monotonic timestamp at Debug level and pass the value through.
 ///
 /// Insert at multiple points in a pipeline to measure elapsed time between steps.
-/// Each call emits a `monotonic_ms` field — diff adjacent values for duration.
+/// Each call emits a `monotonic_ms` field. Diff adjacent values for duration.
 ///
 /// ```gleam
 /// fetch_data()
@@ -940,7 +1024,7 @@ fn fields_to_strings(
 // Internals - emit
 // ---------------------------------------------------------------------------
 
-fn emit(
+fn do_log(
   level: Level,
   message: String,
   fields: List(#(String, FieldValue)),
@@ -1011,7 +1095,20 @@ fn should_log(msg_level: Level, min_level: Level) -> Bool {
   level_to_int(msg_level) >= level_to_int(min_level)
 }
 
-fn level_to_int(level: Level) -> Int {
+/// Map a `Level` to its OTP / syslog integer ordinal.
+///
+/// `Debug = 0, Info = 1, Notice = 2, Warning = 3, Error = 4,
+/// Critical = 5, Alert = 6, Emergency = 7`.
+///
+/// Useful for writing comparison predicates (e.g. inside `filter_event_sink`)
+/// since Gleam custom types don't support `>=` directly.
+///
+/// ```gleam
+/// fn(e: woof.LogEvent) {
+///   woof.level_to_int(e.level) >= woof.level_to_int(woof.Error)
+/// }
+/// ```
+pub fn level_to_int(level: Level) -> Int {
   case level {
     Debug -> 0
     Info -> 1
