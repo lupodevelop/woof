@@ -1,3 +1,5 @@
+> ℹ️ **v1.7** adds `FList`/`FMap`/`FNull` variants, `list`/`map`/`null` constructors, `vstr`/`vint`/`vfloat`/`vbool`/`vnull` raw helpers, native typed JSON output, and public `format_event_*` helpers.
+>
 > ℹ️ **v1.6** adds `child` loggers, `filter_event_sink`, public `emit(LogEvent)`, and public `level_to_int`. No breaking changes.
 >
 > ℹ️ **v1.5** adds instanced logger context, `inspect`, `tap_time`, `level_from_string`, `set_level_from_env`, `get_level`, `append_context`, and soft deprecation warnings for legacy field helpers.
@@ -64,6 +66,25 @@ woof.info("Payment processed", [
   woof.bool("express", True),
 ])
 ```
+
+## Nested data
+
+Lists, nested objects, and explicit null pass through as typed values:
+
+```gleam
+woof.info("order", [
+  woof.str("id", "ORD-42"),
+  woof.list("items", [woof.vstr("widget"), woof.vstr("gadget")]),
+  woof.map("address", [
+    #("city", woof.vstr("Bologna")),
+    #("zip",  woof.vstr("40121")),
+  ]),
+  woof.null("coupon"),
+])
+```
+
+JSON output emits real types: `"items":["widget","gadget"]`, `"address":{...}`,
+`"coupon":null`. Numbers are numbers, booleans are booleans.
 
 ## Testing capture typed events
 
