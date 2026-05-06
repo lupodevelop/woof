@@ -2407,11 +2407,9 @@ pub fn do_emit_json_uses_native_types_test() {
 
 pub fn audit_deep_nesting_50_levels_test() {
   let deep =
-    list.fold(
-      list.range(1, 50),
-      woof.FList([woof.vint(0)]),
-      fn(acc, _) { woof.FList([acc]) },
-    )
+    list.fold(list.range(1, 50), woof.FList([woof.vint(0)]), fn(acc, _) {
+      woof.FList([acc])
+    })
   let event =
     woof.LogEvent(
       level: woof.Info,
@@ -2471,10 +2469,7 @@ pub fn audit_control_chars_in_string_test() {
       level: woof.Info,
       message: "msg",
       fields: [
-        woof.str(
-          "data",
-          "tab\there\nnew\rret\u{0008}bksp\u{000C}ff",
-        ),
+        woof.str("data", "tab\there\nnew\rret\u{0008}bksp\u{000C}ff"),
       ],
       timestamp: "ts",
       namespace: None,
