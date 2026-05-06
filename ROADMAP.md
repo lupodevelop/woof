@@ -3,16 +3,16 @@
 The path from v1.6 to v2.0. Four releases that take woof from a "data-driven
 logging frontend" to the standard logging library for Gleam.
 
-**Current version:** v1.6.0
+**Current version:** v1.7.0
 
 ## Upcoming releases at a glance
 
-| Version | Theme | Key additions |
-| :------ | :---- | :------------ |
-| v1.7 | Complete data model | `FList`, `FMap`, `FNull` with native JSON output |
-| v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions |
-| v1.9 | Production hardening | Sampling, rate limiting, redaction, cardinality cap, benchmarks |
-| v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers |
+| Version | Theme | Key additions | Status |
+| :------ | :---- | :------------ | :----- |
+| v1.7 | Complete data model | `FList`, `FMap`, `FNull` with native JSON output | shipped |
+| v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | planned |
+| v1.9 | Production hardening | Sampling, rate limiting, redaction, cardinality cap, benchmarks | planned |
+| v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers | planned |
 
 ## v1.7: Complete Data Model and Native JSON
 
@@ -65,6 +65,19 @@ infrastructure.
   OTel `error.*` conventions
 * `bench/` directory with criterion-style benchmarks vs raw OTP
   `logger:log/4`
+* **Robustness fixes carried over from earlier audits:**
+  * **Sink crash isolation.** Wrap each sink call in `do_emit` so a crash in
+    one sink does not prevent later sinks from receiving the event. Errors
+    are logged to stderr (mentioned in the original v1.4 plan, never
+    implemented).
+  * **NaN / Infinity float JSON safety.** `gleam_float.to_string(0.0/.0.0)`
+    produces a string that is not valid JSON. Replace with `null` (or a
+    documented sentinel) when emitting JSON output.
+  * **ANSI escape sanitisation in `Text` format.** A user-controlled message
+    containing `` bytes can inject ANSI codes into terminals reading
+    the log file. Strip or escape ESC bytes in `format_text` for the
+    `entry.message` field. (`Json` already neutralises them via
+    `json_escape`.)
 * New documentation:
   * `docs/production_setup.md`
   * `docs/cardinality.md`
@@ -98,6 +111,18 @@ removes the duplicated legacy paths.
 * All context APIs (`with_context`, `set_global_context`, instanced `Logger`)
 * All pipeline helpers (`tap_*`, `log_error`, `time`, `inspect`, `tap_time`)
 * All v1.7 to v1.9 additions
+
+**Architectural follow-ups (carried over from audit):**
+
+* **JS FFI typed-field handling.** Currently `beam_event_log` on JavaScript
+  ignores the `fields` argument and routes the pre-formatted message to
+  `console.*`. With the unified `Sink = fn(LogEvent) -> Nil` contract the
+  JS sink can pattern-match on `FieldValue` and emit structured objects
+  via `console.dir` or similar.
+* **Custom formatter access to typed values.** Today `Custom(fn(Entry))`
+  receives only stringified fields (Entry-based path). Removing `Entry`
+  in v2.0 lets custom formatters operate directly on `LogEvent`, gaining
+  full type fidelity.
 
 A migration guide will ship as `docs/migration_v2_0.md`.
 
