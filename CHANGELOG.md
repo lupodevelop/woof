@@ -3,6 +3,74 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-04-30
+
+### Added
+
+- **`FList(List(FieldValue))` / `FMap(List(#(String, FieldValue)))` / `FNull`** -
+  three new `FieldValue` variants. Nested data (arrays, objects, explicit
+  null) can now flow through the entire pipeline as typed values.
+
+- **`woof.list(key, items)` / `woof.map(key, pairs)` / `woof.null(key)`** -
+  field constructors for the new variants.
+
+- **`woof.vstr` / `vint` / `vfloat` / `vbool` / `vnull`** - raw-value helpers
+  (no key) for ergonomic nested construction inside `FList` / `FMap`:
+
+  ```gleam
+  woof.info("order", [
+    woof.str("id", "ORD-42"),
+    woof.list("items", [woof.vstr("widget"), woof.vstr("gadget")]),
+    woof.map("address", [
+      #("city", woof.vstr("Bologna")),
+      #("zip",  woof.vstr("40121")),
+    ]),
+  ])
+  ```
+
+- **Native JSON output** - the `Json` formatter now emits native JSON types:
+
+  | Field | Before (v1.6) | After (v1.7) |
+  | :---- | :------------ | :----------- |
+  | `FInt(42)` | `"42"` | `42` |
+  | `FBool(True)` | `"true"` | `true` |
+  | `FNull` | (n/a) | `null` |
+  | `FList([FInt(1), FInt(2)])` | (n/a) | `[1, 2]` |
+  | `FMap([("k", FInt(1))])` | (n/a) | `{"k": 1}` |
+
+  Reserved keys (`level`, `time`, `ns`, `msg`) are still prefixed with `_` on
+  collision. JSON escaping for strings is unchanged.
+
+- **`format_event_json(LogEvent) -> String`** - public JSON formatter taking
+  a `LogEvent` directly. Uses the native typed serialisation.
+
+- **`format_event_text(LogEvent, ColorMode) -> String`** - public Text
+  formatter for users writing custom sinks.
+
+- **`format_event_compact(LogEvent) -> String`** - public Compact formatter.
+
+### Changed
+
+- **JSON output is no longer string-stringified.** Programs that grep-parsed
+  JSON for stringified numbers / booleans (e.g. `"port":"3000"`) will need
+  to update their consumers. Real JSON parsers are unaffected and gain type
+  fidelity.
+
+- **Erlang FFI `field_value_to_term/1`** extended for the new variants:
+  `FList` becomes a list, `FMap` becomes a map with binary keys, `FNull`
+  becomes the atom `null`.
+
+### Maintenance
+
+- **`dev/woof_dev.gleam`** showcase updated. The legacy field helper demo
+  (`field` / `int_field` / `float_field` / `bool_field`) was replaced with
+  a v1.7 nested-data demo (`list` / `map` / `null` + `v*` raw helpers).
+  Running `gleam dev` is now warning-free.
+- Removed four trivial unit tests for the deprecated field helpers. The
+  helpers are 1-line aliases over `str` / `int` / `float` / `bool`; the
+  `@deprecated` attribute itself is the test, and removing the call sites
+  silences the build noise.
+
 ## [1.6.0] - 2026-04-25
 
 ### Added
@@ -349,6 +417,7 @@ They remain in the public API until v2.0:
 - Cross-platform support: identical behaviour on BEAM and JavaScript targets.
 - Test suite (34 tests) and documentation in README and project reference.
 
+[1.7.0]: https://hex.pm/packages/woof/1.7.0
 [1.6.0]: https://hex.pm/packages/woof/1.6.0
 [1.5.0]: https://hex.pm/packages/woof/1.5.0
 [1.4.0]: https://hex.pm/packages/woof/1.4.0
