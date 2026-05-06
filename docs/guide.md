@@ -66,6 +66,20 @@ Since v1.3, fields carry their original Gleam types through the entire pipeline.
 | `woof.int("key", 42)` | `#(String, FieldValue)` | `FInt` |
 | `woof.float("key", 3.14)` | `#(String, FieldValue)` | `FFloat` |
 | `woof.bool("key", True)` | `#(String, FieldValue)` | `FBool` |
+| `woof.list("key", items)` | `#(String, FieldValue)` | `FList` (v1.7) |
+| `woof.map("key", pairs)` | `#(String, FieldValue)` | `FMap` (v1.7) |
+| `woof.null("key")` | `#(String, FieldValue)` | `FNull` (v1.7) |
+
+Raw value helpers (no key) for nested construction inside `FList` items
+and `FMap` values:
+
+| Helper | Returns | Wraps |
+| :--- | :--- | :--- |
+| `woof.vstr("v")` | `FieldValue` | `FString` |
+| `woof.vint(42)` | `FieldValue` | `FInt` |
+| `woof.vfloat(3.14)` | `FieldValue` | `FFloat` |
+| `woof.vbool(True)` | `FieldValue` | `FBool` |
+| `woof.vnull()` | `FieldValue` | `FNull` |
 
 ```gleam
 woof.info("Payment processed", [
@@ -96,6 +110,34 @@ fn my_sink(event: woof.LogEvent) -> Nil {
   })
 }
 ```
+
+### Nested data (v1.7)
+
+Lists, nested objects, and explicit null pass through as typed values:
+
+```gleam
+woof.info("order", [
+  woof.str("id", "ORD-42"),
+  woof.list("items", [
+    woof.vstr("widget"),
+    woof.vstr("gadget"),
+  ]),
+  woof.map("address", [
+    #("city", woof.vstr("Bologna")),
+    #("zip", woof.vstr("40121")),
+  ]),
+  woof.null("coupon"),
+])
+```
+
+JSON output emits real types (`"items":["widget","gadget"]`,
+`"address":{...}`, `"coupon":null`). The Erlang FFI maps `FList` to a list,
+`FMap` to a map with binary keys, and `FNull` to the atom `null`, so OTP
+logger handlers and Elixir consumers see native Erlang terms.
+
+`Text` and `Compact` formats stringify nested data for readability:
+`[1,2,3]`, `{city=Bologna,zip=40121}`. For full type fidelity use `Json`
+or `format_event_json`.
 
 ### Legacy helpers
 
@@ -187,15 +229,29 @@ One object per line (NDJSON). Ideal for production and log aggregators.
 woof.set_format(woof.Json)
 ```
 
+Field values are emitted as **native JSON types** since v1.7:
+
 ```json
-{"level":"info","time":"2026-02-11T10:30:45.123Z","msg":"User signed in","user_id":"u_123","method":"oauth"}
+{"level":"info","time":"2026-04-30T10:30:45.123Z","msg":"Payment ok","amount_cents":4999,"express":true,"items":["widget","gadget"]}
 ```
 
-Field values are serialised to strings in the JSON output in v1.3. Native JSON number
-and boolean support comes in v2.0.
+| FieldValue | JSON output |
+| :--------- | :---------- |
+| `FString("v")` | `"v"` |
+| `FInt(42)` | `42` |
+| `FFloat(3.14)` | `3.14` |
+| `FBool(True)` | `true` |
+| `FNull` | `null` |
+| `FList([...])` | `[...]` |
+| `FMap([...])` | `{...}` |
 
 Reserved keys (`level`, `time`, `ns`, `msg`) are prefixed with `_` if a field key
 collides with them.
+
+> **Migration note.** Before v1.7, all values were stringified
+> (`"amount_cents":"4999"`, `"express":"true"`). Programs that grep-parsed
+> JSON for stringified numbers or booleans must update; real JSON parsers
+> are unaffected and gain type fidelity.
 
 ### Compact
 
@@ -870,11 +926,19 @@ behave identically on both targets.
 | `str(key, String)` | `#(String, FString)` | Preferred for strings |
 | `int(key, Int)` | `#(String, FInt)` | Preferred for integers |
 | `float(key, Float)` | `#(String, FFloat)` | Preferred for floats |
-| `bool(key, Bool)` | `#(String, FBool)` | Renders as `"true"`/`"false"` |
-| `field(key, String)` | `#(String, FString)` | Alias for `str` - legacy |
-| `int_field(key, Int)` | `#(String, FInt)` | Alias for `int` - legacy |
-| `float_field(key, Float)` | `#(String, FFloat)` | Alias for `float` - legacy |
-| `bool_field(key, Bool)` | `#(String, FBool)` | Alias for `bool` - legacy |
+| `bool(key, Bool)` | `#(String, FBool)` | JSON output: native `true`/`false` |
+| `list(key, List(FieldValue))` | `#(String, FList)` | Array, items typed (v1.7) |
+| `map(key, List(#(String, FieldValue)))` | `#(String, FMap)` | Nested object (v1.7) |
+| `null(key)` | `#(String, FNull)` | Explicit null (v1.7) |
+| `vstr(String)` | `FString` | Raw value for nested construction (v1.7) |
+| `vint(Int)` | `FInt` | Raw value (v1.7) |
+| `vfloat(Float)` | `FFloat` | Raw value (v1.7) |
+| `vbool(Bool)` | `FBool` | Raw value (v1.7) |
+| `vnull()` | `FNull` | Raw value (v1.7) |
+| `field(key, String)` | `#(String, FString)` | Alias for `str`, deprecated |
+| `int_field(key, Int)` | `#(String, FInt)` | Alias for `int`, deprecated |
+| `float_field(key, Float)` | `#(String, FFloat)` | Alias for `float`, deprecated |
+| `bool_field(key, Bool)` | `#(String, FBool)` | Alias for `bool`, deprecated |
 
 ### Configuration
 
@@ -932,5 +996,8 @@ behave identically on both targets.
 | Function | Description |
 | :--- | :--- |
 | `format(Entry, Format) -> String` | Format an `Entry` without emitting |
-| `level_name(Level) -> String` | `Warning` → `"warning"` |
-| `level_to_int(Level) -> Int` | `Warning` → `3` (OTP / syslog ordinal) |
+| `format_event_json(LogEvent) -> String` | Public JSON formatter, native typed values (v1.7) |
+| `format_event_text(LogEvent, ColorMode) -> String` | Public Text formatter (v1.7) |
+| `format_event_compact(LogEvent) -> String` | Public Compact formatter (v1.7) |
+| `level_name(Level) -> String` | `Warning` to `"warning"` |
+| `level_to_int(Level) -> Int` | `Warning` to `3` (OTP / syslog ordinal) |
