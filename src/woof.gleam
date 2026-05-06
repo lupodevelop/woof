@@ -20,6 +20,9 @@ pub type FieldValue {
   FInt(Int)
   FFloat(Float)
   FBool(Bool)
+  FList(List(FieldValue))
+  FMap(List(#(String, FieldValue)))
+  FNull
 }
 
 /// A fully typed log event, delivered to every registered `EventSink`.
@@ -697,6 +700,69 @@ pub fn bool(key: String, value: Bool) -> #(String, FieldValue) {
   #(key, FBool(value))
 }
 
+/// Create a list field.  Items are themselves `FieldValue`s, so lists may
+/// hold mixed-type or nested data.  Use the `v*` raw-value helpers (`vstr`,
+/// `vint`, `vfloat`, `vbool`, `vnull`) to build items ergonomically.
+///
+/// ```gleam
+/// woof.info("tags", [woof.list("tags", [woof.vstr("urgent"), woof.vstr("billing")])])
+/// ```
+pub fn list(key: String, items: List(FieldValue)) -> #(String, FieldValue) {
+  #(key, FList(items))
+}
+
+/// Create a map (nested object) field.  Pairs use `String` keys and
+/// `FieldValue` values, so maps may hold any combination of typed values.
+///
+/// ```gleam
+/// woof.info("login", [woof.map("address", [
+///   #("city", woof.vstr("Bologna")),
+///   #("zip",  woof.vstr("40121")),
+/// ])])
+/// ```
+pub fn map(
+  key: String,
+  pairs: List(#(String, FieldValue)),
+) -> #(String, FieldValue) {
+  #(key, FMap(pairs))
+}
+
+/// Create a null field.  Distinct from omitting the key: in JSON output
+/// the key appears with `null` as its value.  Useful when the absence of
+/// a value is itself meaningful (database NULL, optional field).
+pub fn null(key: String) -> #(String, FieldValue) {
+  #(key, FNull)
+}
+
+// ---------------------------------------------------------------------------
+// Raw-value helpers (no key) for nested construction (FList / FMap items)
+// ---------------------------------------------------------------------------
+
+/// Wrap a `String` in `FString`.  Use inside `FList` items or `FMap` values.
+pub fn vstr(s: String) -> FieldValue {
+  FString(s)
+}
+
+/// Wrap an `Int` in `FInt`.  Use inside `FList` items or `FMap` values.
+pub fn vint(n: Int) -> FieldValue {
+  FInt(n)
+}
+
+/// Wrap a `Float` in `FFloat`.  Use inside `FList` items or `FMap` values.
+pub fn vfloat(f: Float) -> FieldValue {
+  FFloat(f)
+}
+
+/// Wrap a `Bool` in `FBool`.  Use inside `FList` items or `FMap` values.
+pub fn vbool(b: Bool) -> FieldValue {
+  FBool(b)
+}
+
+/// Return the `FNull` value.  Use inside `FList` items or `FMap` values.
+pub fn vnull() -> FieldValue {
+  FNull
+}
+
 // ---------------------------------------------------------------------------
 // Legacy field helpers
 // ---------------------------------------------------------------------------
@@ -944,6 +1010,71 @@ pub fn format(entry: Entry, output_format: Format) -> String {
   format_entry(entry, output_format, Never)
 }
 
+/// Format a `LogEvent` as JSON with native typed values.
+///
+/// Numbers, booleans, null, arrays, and nested objects are emitted as their
+/// native JSON types (no string-stringification).  Reserved keys (`level`,
+/// `time`, `ns`, `msg`) are prefixed with `_` if a user field collides.
+pub fn format_event_json(event: LogEvent) -> String {
+  format_log_event_json(event)
+}
+
+/// Format a `LogEvent` as multi-line `Text`.
+///
+/// `Text` output stringifies values for readability.  For native typed
+/// JSON output use `format_event_json`.
+pub fn format_event_text(event: LogEvent, colors: ColorMode) -> String {
+  let entry = log_event_to_entry(event)
+  format_text(entry, resolve_colors(colors))
+}
+
+/// Format a `LogEvent` as a single-line `Compact` `key=value` line.
+///
+/// Values are stringified, with quoting around values that contain spaces,
+/// `=`, or are empty (logfmt-compatible).
+pub fn format_event_compact(event: LogEvent) -> String {
+  let entry = log_event_to_entry(event)
+  format_compact(entry)
+}
+
+fn log_event_to_entry(event: LogEvent) -> Entry {
+  Entry(
+    level: event.level,
+    message: event.message,
+    fields: fields_to_strings(event.fields),
+    namespace: event.namespace,
+    timestamp: event.timestamp,
+  )
+}
+
+fn format_log_event_json(event: LogEvent) -> String {
+  let core = case event.namespace {
+    Some(ns) -> [
+      json_pair("level", level_name(event.level)),
+      json_pair("time", event.timestamp),
+      json_pair("ns", ns),
+      json_pair("msg", event.message),
+    ]
+    None -> [
+      json_pair("level", level_name(event.level)),
+      json_pair("time", event.timestamp),
+      json_pair("msg", event.message),
+    ]
+  }
+
+  let user_fields =
+    list.map(event.fields, fn(f) {
+      let #(k, v) = f
+      let safe_k = case k {
+        "level" | "time" | "ns" | "msg" -> "_" <> k
+        _ -> k
+      }
+      json_pair_typed(safe_k, v)
+    })
+
+  "{" <> string.join(list.append(core, user_fields), ",") <> "}"
+}
+
 /// Return the lowercase name of a level.
 ///
 /// Useful inside `Custom` formatters.
@@ -1003,11 +1134,21 @@ fn field_value_to_string(fv: FieldValue) -> String {
     FString(s) -> s
     FInt(n) -> gleam_int.to_string(n)
     FFloat(f) -> gleam_float.to_string(f)
-    FBool(b) ->
-      case b {
-        True -> "true"
-        False -> "false"
-      }
+    FBool(True) -> "true"
+    FBool(False) -> "false"
+    FNull -> "null"
+    FList(items) -> {
+      let parts = list.map(items, field_value_to_string)
+      "[" <> string.join(parts, ",") <> "]"
+    }
+    FMap(pairs) -> {
+      let parts =
+        list.map(pairs, fn(p) {
+          let #(k, v) = p
+          k <> "=" <> field_value_to_string(v)
+        })
+      "{" <> string.join(parts, ",") <> "}"
+    }
   }
 }
 
@@ -1071,7 +1212,22 @@ fn do_emit(
       namespace: namespace,
       timestamp: timestamp,
     )
-  let formatted = format_entry(entry, state.format, state.colors)
+  // Json format uses native typed serialisation (v1.7); Text/Compact/Custom
+  // continue to receive the stringified Entry.
+  let formatted = case state.format {
+    Json -> {
+      let log_event =
+        LogEvent(
+          level: level,
+          message: message,
+          fields: all_fields,
+          timestamp: timestamp,
+          namespace: namespace,
+        )
+      format_log_event_json(log_event)
+    }
+    _ -> format_entry(entry, state.format, state.colors)
+  }
   list.each(state.sinks, fn(sink) { sink(entry, formatted) })
 
   // ── Typed event sink path - preserve FieldValue ───────────────────────
@@ -1288,6 +1444,38 @@ fn format_json(entry: Entry) -> String {
 
 fn json_pair(key: String, value: String) -> String {
   "\"" <> json_escape(key) <> "\":\"" <> json_escape(value) <> "\""
+}
+
+// ---------------------------------------------------------------------------
+// Native JSON serialisation (v1.7) - emit FInt as 42, FBool as true,
+// FNull as null, FList as array, FMap as object.  No string-stringification.
+// ---------------------------------------------------------------------------
+
+fn field_value_to_json(fv: FieldValue) -> String {
+  case fv {
+    FString(s) -> "\"" <> json_escape(s) <> "\""
+    FInt(n) -> gleam_int.to_string(n)
+    FFloat(f) -> gleam_float.to_string(f)
+    FBool(True) -> "true"
+    FBool(False) -> "false"
+    FNull -> "null"
+    FList(items) -> {
+      let parts = list.map(items, field_value_to_json)
+      "[" <> string.join(parts, ",") <> "]"
+    }
+    FMap(pairs) -> {
+      let parts =
+        list.map(pairs, fn(p) {
+          let #(k, v) = p
+          "\"" <> json_escape(k) <> "\":" <> field_value_to_json(v)
+        })
+      "{" <> string.join(parts, ",") <> "}"
+    }
+  }
+}
+
+fn json_pair_typed(key: String, value: FieldValue) -> String {
+  "\"" <> json_escape(key) <> "\":" <> field_value_to_json(value)
 }
 
 fn json_escape(s: String) -> String {

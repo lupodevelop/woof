@@ -110,12 +110,15 @@ fn demo_field_helpers() -> Nil {
     woof.bool("express", True),
   ])
 
-  note("Legacy helpers (field/int_field/float_field/bool_field) still work")
-  woof.info("Legacy helpers", [
-    woof.field("order_id", "ORD-9912"),
-    woof.int_field("amount_cents", 4999),
-    woof.float_field("tax_rate", 22.0),
-    woof.bool_field("express", True),
+  note("list / map / null + v* raw helpers for nested data (v1.7)")
+  woof.info("Order with nested data", [
+    woof.str("id", "ORD-9912"),
+    woof.list("tags", [woof.vstr("urgent"), woof.vstr("billing")]),
+    woof.map("address", [
+      #("city", woof.vstr("Bologna")),
+      #("zip", woof.vstr("40121")),
+    ]),
+    woof.null("coupon"),
   ])
 }
 

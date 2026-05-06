@@ -98,7 +98,14 @@ beam_event_log(Level, Message, Fields, Namespace) ->
 field_value_to_term({f_string, S}) -> S;
 field_value_to_term({f_int,    N}) -> N;
 field_value_to_term({f_float,  F}) -> F;
-field_value_to_term({f_bool,   B}) -> B.
+field_value_to_term({f_bool,   B}) -> B;
+field_value_to_term({f_list,   Items}) ->
+    [field_value_to_term(I) || I <- Items];
+field_value_to_term({f_map,    Pairs}) ->
+    maps:from_list(
+        [{K, field_value_to_term(V)} || {K, V} <- Pairs]
+    );
+field_value_to_term(f_null) -> null.
 
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 

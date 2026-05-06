@@ -702,31 +702,12 @@ pub fn typed_fields_render_to_strings_in_entry_test() {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy field helpers - still work, return FieldValue now
+// Legacy field helpers (`field`/`int_field`/`float_field`/`bool_field`) are
+// soft-deprecated in v1.5 and remain public until v2.0.  Unit tests for the
+// deprecated aliases were removed in v1.7 to keep the build noise-free.
+// The aliases themselves are 1-line wrappers around `str`/`int`/`float`/`bool`
+// and would only fail to compile.
 // ---------------------------------------------------------------------------
-
-pub fn legacy_field_helper_string_test() {
-  woof.field("key", "value")
-  |> should.equal(#("key", woof.FString("value")))
-}
-
-pub fn legacy_field_helper_int_test() {
-  woof.int_field("status", 200)
-  |> should.equal(#("status", woof.FInt(200)))
-}
-
-pub fn legacy_field_helper_float_test() {
-  woof.float_field("duration", 12.5)
-  |> should.equal(#("duration", woof.FFloat(12.5)))
-}
-
-pub fn legacy_field_helper_bool_test() {
-  woof.bool_field("cached", True)
-  |> should.equal(#("cached", woof.FBool(True)))
-
-  woof.bool_field("cached", False)
-  |> should.equal(#("cached", woof.FBool(False)))
-}
 
 pub fn field_helpers_in_log_call_test() {
   reset()
@@ -1488,6 +1469,28 @@ pub fn beam_event_sink_int_field_is_native_integer_test() {
 }
 
 @target(erlang)
+pub fn beam_event_sink_v17_variants_do_not_crash_test() {
+  // Smoke test: FList / FMap / FNull values must traverse the FFI without
+  // crashing.  If the Gleam atom names differ from what woof_ffi.erl
+  // expects, this would explode with a function_clause error.
+  reset()
+  install_test_handler()
+  woof.set_event_sink(woof.beam_event_sink)
+
+  woof.info("v17 variants", [
+    woof.list("xs", [woof.vint(1), woof.vint(2)]),
+    woof.map("o", [#("k", woof.vstr("v"))]),
+    woof.null("missing"),
+  ])
+
+  let assert Ok(event) = pop_test_event()
+  test_event_message(event) |> should.equal("v17 variants")
+
+  remove_test_handler()
+  reset()
+}
+
+@target(erlang)
 pub fn beam_logger_sink_new_levels_reach_logger_test() {
   reset()
   install_test_handler()
@@ -2044,4 +2047,608 @@ pub fn time_emits_int_duration_field_test() {
   let assert [#("duration_ms", woof.FInt(_))] = event.fields
 
   reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -New FieldValue variants (FList, FMap, FNull)
+// ---------------------------------------------------------------------------
+
+pub fn flist_variant_exists_test() {
+  let v = woof.FList([woof.FInt(1), woof.FInt(2), woof.FInt(3)])
+  let woof.FList(items) = v
+  list.length(items) |> should.equal(3)
+}
+
+pub fn fmap_variant_exists_test() {
+  let v = woof.FMap([#("k", woof.FString("v"))])
+  let woof.FMap(pairs) = v
+  list.length(pairs) |> should.equal(1)
+}
+
+pub fn fnull_variant_exists_test() {
+  let v = woof.FNull
+  v |> should.equal(woof.FNull)
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -Field constructors: list, map, null
+// ---------------------------------------------------------------------------
+
+pub fn list_constructor_test() {
+  let f = woof.list("items", [woof.FString("a"), woof.FString("b")])
+  f
+  |> should.equal(#("items", woof.FList([woof.FString("a"), woof.FString("b")])))
+}
+
+pub fn map_constructor_test() {
+  let f = woof.map("addr", [#("city", woof.FString("Bologna"))])
+  f
+  |> should.equal(#("addr", woof.FMap([#("city", woof.FString("Bologna"))])))
+}
+
+pub fn null_constructor_test() {
+  woof.null("optional") |> should.equal(#("optional", woof.FNull))
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -Raw value helpers (vstr, vint, vfloat, vbool, vnull)
+// ---------------------------------------------------------------------------
+
+pub fn vstr_helper_test() {
+  woof.vstr("x") |> should.equal(woof.FString("x"))
+}
+
+pub fn vint_helper_test() {
+  woof.vint(42) |> should.equal(woof.FInt(42))
+}
+
+pub fn vfloat_helper_test() {
+  woof.vfloat(3.14) |> should.equal(woof.FFloat(3.14))
+}
+
+pub fn vbool_helper_test() {
+  woof.vbool(True) |> should.equal(woof.FBool(True))
+  woof.vbool(False) |> should.equal(woof.FBool(False))
+}
+
+pub fn vnull_helper_test() {
+  woof.vnull() |> should.equal(woof.FNull)
+}
+
+pub fn nested_construction_test() {
+  // Real-world: a list of typed values + a nested map
+  let f =
+    woof.list("rows", [
+      woof.FMap([
+        #("id", woof.vint(1)),
+        #("name", woof.vstr("alice")),
+      ]),
+      woof.FMap([
+        #("id", woof.vint(2)),
+        #("name", woof.vstr("bob")),
+      ]),
+    ])
+  let assert #("rows", woof.FList(items)) = f
+  list.length(items) |> should.equal(2)
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -Native JSON output (FInt -> 42, not "42")
+// ---------------------------------------------------------------------------
+
+pub fn json_emits_int_as_number_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "n",
+      fields: [],
+      namespace: None,
+      timestamp: "ts",
+    )
+  // Use the new public LogEvent-based formatter
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "msg",
+      fields: [woof.int("n", 42)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let _ = entry
+  let out = woof.format_event_json(event)
+  // 42 must appear unquoted as a JSON number
+  out |> string.contains("\"n\":42") |> should.be_true
+  // Must NOT appear as "42"
+  out |> string.contains("\"n\":\"42\"") |> should.be_false
+}
+
+pub fn json_emits_bool_as_native_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.bool("ok", True), woof.bool("ko", False)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"ok\":true") |> should.be_true
+  out |> string.contains("\"ko\":false") |> should.be_true
+  out |> string.contains("\"true\"") |> should.be_false
+}
+
+pub fn json_emits_float_as_number_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.float("rate", 3.14)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"rate\":3.14") |> should.be_true
+}
+
+pub fn json_emits_null_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.null("missing")],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"missing\":null") |> should.be_true
+  out |> string.contains("\"null\"") |> should.be_false
+}
+
+pub fn json_emits_list_as_array_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.list("xs", [woof.vint(1), woof.vint(2), woof.vint(3)])],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"xs\":[1,2,3]") |> should.be_true
+}
+
+pub fn json_emits_map_as_object_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.map("addr", [
+          #("city", woof.vstr("Bologna")),
+          #("zip", woof.vstr("40121")),
+        ]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out
+  |> string.contains("\"addr\":{\"city\":\"Bologna\",\"zip\":\"40121\"}")
+  |> should.be_true
+}
+
+pub fn json_emits_nested_map_in_list_test() {
+  // Nested combination: list of maps
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.list("rows", [
+          woof.FMap([#("id", woof.vint(1))]),
+          woof.FMap([#("id", woof.vint(2))]),
+        ]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out
+  |> string.contains("\"rows\":[{\"id\":1},{\"id\":2}]")
+  |> should.be_true
+}
+
+pub fn json_emits_empty_list_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.list("xs", [])],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"xs\":[]") |> should.be_true
+}
+
+pub fn json_emits_empty_map_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.map("o", [])],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"o\":{}") |> should.be_true
+}
+
+pub fn json_emits_list_of_nulls_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.list("nulls", [woof.vnull(), woof.vnull()])],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"nulls\":[null,null]") |> should.be_true
+}
+
+pub fn json_escapes_map_keys_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.map("data", [
+          #("key with \"quote\"", woof.vstr("v")),
+        ]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  // Map key must be JSON-escaped (quotes inside the key)
+  out
+  |> string.contains("\"key with \\\"quote\\\"\":\"v\"")
+  |> should.be_true
+}
+
+pub fn json_reserved_key_check_only_at_top_level_test() {
+  // "level" inside a nested FMap must NOT be prefixed (reserved keys only
+  // matter at the top level where they collide with woof's own keys).
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.map("inner", [#("level", woof.vstr("debug"))]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  // Inner "level" stays as-is (no _ prefix)
+  out
+  |> string.contains("\"inner\":{\"level\":\"debug\"}")
+  |> should.be_true
+  // Must NOT have prefixed it
+  out |> string.contains("_level") |> should.be_false
+}
+
+pub fn json_deeply_nested_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.map("user", [
+          #("id", woof.vint(42)),
+          #(
+            "address",
+            woof.FMap([
+              #(
+                "lines",
+                woof.FList([woof.vstr("Via Roma 1"), woof.vstr("40121 Bologna")]),
+              ),
+            ]),
+          ),
+        ]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out
+  |> string.contains(
+    "\"user\":{\"id\":42,\"address\":{\"lines\":[\"Via Roma 1\",\"40121 Bologna\"]}}",
+  )
+  |> should.be_true
+}
+
+pub fn json_negative_int_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.int("delta", -42)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"delta\":-42") |> should.be_true
+}
+
+pub fn do_emit_json_uses_native_types_test() {
+  // End-to-end: when format=Json, the legacy sink receives a native-typed
+  // JSON string (not stringified values). Tests the do_emit Json branch.
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.Json,
+    colors: woof.Never,
+  ))
+  woof.set_sink(fn(_entry, formatted) {
+    // Native types: 3000 unquoted, true unquoted
+    formatted |> string.contains("\"port\":3000") |> should.be_true
+    formatted |> string.contains("\"ok\":true") |> should.be_true
+    formatted |> string.contains("\"port\":\"3000\"") |> should.be_false
+  })
+  woof.info("boot", [woof.int("port", 3000), woof.bool("ok", True)])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -Security & solidity audit
+// ---------------------------------------------------------------------------
+
+pub fn audit_deep_nesting_50_levels_test() {
+  let deep =
+    list.fold(list.range(1, 50), woof.FList([woof.vint(0)]), fn(acc, _) {
+      woof.FList([acc])
+    })
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "deep",
+      fields: [#("nest", deep)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("[0]") |> should.be_true
+}
+
+pub fn audit_large_list_500_items_test() {
+  let items = list.map(list.range(1, 500), woof.vint)
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "wide",
+      fields: [woof.list("nums", items)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("[1,2,3,") |> should.be_true
+  out |> string.contains(",499,500]") |> should.be_true
+}
+
+pub fn audit_empty_message_and_fields_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "",
+      fields: [],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"msg\":\"\"") |> should.be_true
+}
+
+pub fn audit_unicode_key_and_value_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "msg",
+      fields: [woof.str("città", "Bologna 🇮🇹")],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"città\":\"Bologna 🇮🇹\"") |> should.be_true
+}
+
+pub fn audit_control_chars_in_string_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "msg",
+      fields: [
+        woof.str("data", "tab\there\nnew\rret\u{0008}bksp\u{000C}ff"),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\\t") |> should.be_true
+  out |> string.contains("\\n") |> should.be_true
+  out |> string.contains("\\r") |> should.be_true
+  out |> string.contains("\\b") |> should.be_true
+  out |> string.contains("\\f") |> should.be_true
+}
+
+pub fn audit_ansi_escape_in_field_value_neutralised_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.str("evil", "\u{001B}[31mRED\u{001B}[0m")],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\\u001b") |> should.be_true
+}
+
+pub fn audit_emit_with_empty_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.emit(woof.LogEvent(
+    level: woof.Info,
+    message: "bare",
+    fields: [],
+    timestamp: "ts",
+    namespace: None,
+  ))
+  let assert [event] = get()
+  event.fields |> should.equal([])
+  reset()
+}
+
+pub fn audit_emit_with_namespace_in_event_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.emit(woof.LogEvent(
+    level: woof.Info,
+    message: "m",
+    fields: [],
+    timestamp: "ts",
+    namespace: Some("bridge"),
+  ))
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("bridge"))
+  reset()
+}
+
+pub fn audit_filter_event_sink_predicate_drop_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let drop_all = woof.filter_event_sink(fn(_) { False }, sink)
+  woof.set_event_sink(drop_all)
+  woof.info("dropped 1", [])
+  woof.warning("dropped 2", [])
+  woof.error("dropped 3", [])
+  get() |> list.length |> should.equal(0)
+  reset()
+}
+
+pub fn audit_reserved_keys_all_four_top_level_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.str("level", "x"),
+        woof.str("time", "x"),
+        woof.str("ns", "x"),
+        woof.str("msg", "x"),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"_level\":\"x\"") |> should.be_true
+  out |> string.contains("\"_time\":\"x\"") |> should.be_true
+  out |> string.contains("\"_ns\":\"x\"") |> should.be_true
+  out |> string.contains("\"_msg\":\"x\"") |> should.be_true
+}
+
+pub fn audit_emit_bypasses_level_filter_test() {
+  // emit() is a primitive: caller decided. Level filter is NOT applied.
+  reset()
+  woof.set_level(woof.Emergency)
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  woof.emit(woof.LogEvent(
+    level: woof.Debug,
+    message: "below threshold",
+    fields: [],
+    timestamp: "ts",
+    namespace: None,
+  ))
+  get() |> list.length |> should.equal(1)
+  reset()
+}
+
+pub fn audit_special_chars_in_field_key_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.str("evil\"key\\name", "v")],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"evil\\\"key\\\\name\":\"v\"") |> should.be_true
+}
+
+pub fn audit_special_chars_in_map_key_test() {
+  // Map keys (nested) must also be JSON-escaped
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.map("o", [#("a\\b\"c", woof.vstr("v"))]),
+      ],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"a\\\\b\\\"c\":\"v\"") |> should.be_true
+}
+
+pub fn json_emits_string_with_escaping_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.str("q", "say \"hi\"")],
+      timestamp: "ts",
+      namespace: None,
+    )
+  let out = woof.format_event_json(event)
+  out |> string.contains("\"q\":\"say \\\"hi\\\"\"") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7 -Public format helpers
+// ---------------------------------------------------------------------------
+
+pub fn format_event_text_returns_string_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "Server started",
+      fields: [woof.int("port", 3000)],
+      timestamp: "2026-04-25T10:30:45.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_text(event, woof.Never)
+  out |> string.contains("[INFO]") |> should.be_true
+  out |> string.contains("Server started") |> should.be_true
+  out |> string.contains("port") |> should.be_true
+}
+
+pub fn format_event_compact_returns_string_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Warning,
+      message: "slow",
+      fields: [woof.int("ms", 1200)],
+      timestamp: "2026-04-25T10:30:45.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_compact(event)
+  out |> string.contains("WARN") |> should.be_true
+  out |> string.contains("slow") |> should.be_true
+  out |> string.contains("ms=1200") |> should.be_true
 }
