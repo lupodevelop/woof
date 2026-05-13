@@ -3,6 +3,31 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.1] - 2026-05-13
+
+### Fixed
+
+- **NaN / Infinity float JSON safety** - `FFloat` values that serialise to
+  `"NaN"`, `"Infinity"`, or `"-Infinity"` (reachable on the JavaScript target
+  via FFI) now emit `null` in JSON output instead of producing invalid JSON.
+
+- **ANSI escape sanitisation in Text format** - ESC bytes (``) in
+  user-controlled message strings, namespace, field keys, and field values are
+  stripped before being written to Text output.  This prevents terminal ANSI
+  injection when log files are tailed in a terminal.  Json format was already
+  safe via `json_escape` (converts ESC to ``).
+
+- **Sink crash isolation** - a panic or unhandled exception in one legacy sink
+  or event sink no longer prevents subsequent sinks from receiving the event.
+  The error is reported to stderr and execution continues.  Applies to both
+  `do_emit` (the normal logging path) and the public `emit` function.
+
+### Maintenance
+
+- 6 new tests covering all three fixes.
+- `woof_ffi.erl`: added `safe_call_fn/1` with stderr crash reporting.
+- `woof_ffi.mjs`: added `safe_call_fn`, `nan_float`, `infinity_float`.
+
 ## [1.7.0] - 2026-04-30
 
 ### Added

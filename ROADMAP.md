@@ -3,13 +3,14 @@
 The path from v1.6 to v2.0. Four releases that take woof from a "data-driven
 logging frontend" to the standard logging library for Gleam.
 
-**Current version:** v1.7.0
+**Current version:** v1.7.1
 
 ## Upcoming releases at a glance
 
 | Version | Theme | Key additions | Status |
 | :------ | :---- | :------------ | :----- |
 | v1.7 | Complete data model | `FList`, `FMap`, `FNull` with native JSON output | shipped |
+| v1.7.1 | Robustness patch | NaN/Inf JSON safety, ANSI strip in Text, sink crash isolation | shipped |
 | v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | planned |
 | v1.9 | Production hardening | Sampling, rate limiting, redaction, cardinality cap, benchmarks | planned |
 | v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers | planned |
@@ -65,19 +66,6 @@ infrastructure.
   OTel `error.*` conventions
 * `bench/` directory with criterion-style benchmarks vs raw OTP
   `logger:log/4`
-* **Robustness fixes carried over from earlier audits:**
-  * **Sink crash isolation.** Wrap each sink call in `do_emit` so a crash in
-    one sink does not prevent later sinks from receiving the event. Errors
-    are logged to stderr (mentioned in the original v1.4 plan, never
-    implemented).
-  * **NaN / Infinity float JSON safety.** `gleam_float.to_string(0.0/.0.0)`
-    produces a string that is not valid JSON. Replace with `null` (or a
-    documented sentinel) when emitting JSON output.
-  * **ANSI escape sanitisation in `Text` format.** A user-controlled message
-    containing `` bytes can inject ANSI codes into terminals reading
-    the log file. Strip or escape ESC bytes in `format_text` for the
-    `entry.message` field. (`Json` already neutralises them via
-    `json_escape`.)
 * New documentation:
   * `docs/production_setup.md`
   * `docs/cardinality.md`
