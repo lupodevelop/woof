@@ -122,3 +122,22 @@ export function get_env(name) {
   } catch (_) {}
   return new Error(undefined);
 }
+
+// Call f(), catching any exception so a crashing sink cannot block later ones.
+export function safe_call_fn(f) {
+  try {
+    f();
+  } catch (e) {
+    const msg = `[woof] sink crashed: ${e}`;
+    if (typeof process !== "undefined" && process.stderr) {
+      process.stderr.write(msg + "\n");
+    } else {
+      console.error(msg);
+    }
+  }
+  return undefined;
+}
+
+// Test helpers - expose non-finite float values for JS-target tests only.
+export function nan_float() { return NaN; }
+export function infinity_float() { return Infinity; }

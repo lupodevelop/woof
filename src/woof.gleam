@@ -340,10 +340,12 @@ pub fn emit(event: LogEvent) -> Nil {
       timestamp: event.timestamp,
     )
   let formatted = format_entry(entry, state.format, state.colors)
-  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
+  list.each(state.sinks, fn(sink) {
+    ffi_safe_call(fn() { sink(entry, formatted) })
+  })
   case state.event_sink {
     None -> Nil
-    Some(event_sink_fn) -> event_sink_fn(event)
+    Some(event_sink_fn) -> ffi_safe_call(fn() { event_sink_fn(event) })
   }
 }
 
@@ -1228,7 +1230,9 @@ fn do_emit(
     }
     _ -> format_entry(entry, state.format, state.colors)
   }
-  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
+  list.each(state.sinks, fn(sink) {
+    ffi_safe_call(fn() { sink(entry, formatted) })
+  })
 
   // ── Typed event sink path - preserve FieldValue ───────────────────────
   case state.event_sink {
@@ -1242,7 +1246,7 @@ fn do_emit(
           timestamp: timestamp,
           namespace: namespace,
         )
-      event_sink_fn(log_event)
+      ffi_safe_call(fn() { event_sink_fn(log_event) })
     }
   }
 }
@@ -1314,6 +1318,12 @@ fn no_color_set() -> Bool {
   result.is_ok(ffi_get_env("NO_COLOR"))
 }
 
+/// Strip ESC bytes from user-controlled strings in Text output to prevent
+/// terminal ANSI injection.  Json format is safe via json_escape.
+fn strip_ansi(s: String) -> String {
+  string.replace(s, "\u{001B}", "")
+}
+
 /// Text format example:
 ///   [INFO] 10:30:45 Server started
 ///     port: 3000
@@ -1325,11 +1335,12 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
   let time = short_time(entry.timestamp)
   let ns = case entry.namespace {
     None -> ""
-    Some(n) -> n <> ": "
+    Some(n) -> strip_ansi(n) <> ": "
   }
+  let message = strip_ansi(entry.message)
 
   let header = case use_colors {
-    False -> "[" <> tag <> "] " <> time <> " " <> ns <> entry.message
+    False -> "[" <> tag <> "] " <> time <> " " <> ns <> message
     True -> {
       let color = level_color(entry.level)
       color
@@ -1343,7 +1354,7 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
       <> ansi_reset
       <> " "
       <> ns
-      <> entry.message
+      <> message
     }
   }
 
@@ -1353,7 +1364,7 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
       let field_lines =
         list.map(fields, fn(pair) {
           let #(k, v) = pair
-          "  " <> k <> ": " <> v
+          "  " <> strip_ansi(k) <> ": " <> strip_ansi(v)
         })
         |> string.join("\n")
       header <> "\n" <> field_lines
@@ -1455,7 +1466,18 @@ fn field_value_to_json(fv: FieldValue) -> String {
   case fv {
     FString(s) -> "\"" <> json_escape(s) <> "\""
     FInt(n) -> gleam_int.to_string(n)
-    FFloat(f) -> gleam_float.to_string(f)
+    FFloat(f) -> {
+      let s = gleam_float.to_string(f)
+      let lower = string.lowercase(s)
+      let non_finite =
+        string.starts_with(lower, "nan")
+        || string.starts_with(lower, "inf")
+        || string.starts_with(lower, "-inf")
+      case non_finite {
+        True -> "null"
+        False -> s
+      }
+    }
     FBool(True) -> "true"
     FBool(False) -> "false"
     FNull -> "null"
@@ -1608,3 +1630,7 @@ fn ffi_beam_event_log(
   fields: List(#(String, FieldValue)),
   namespace: Option(String),
 ) -> Nil
+
+@external(erlang, "woof_ffi", "safe_call_fn")
+@external(javascript, "./woof_ffi.mjs", "safe_call_fn")
+fn ffi_safe_call(f: fn() -> Nil) -> Nil

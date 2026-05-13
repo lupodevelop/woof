@@ -6,7 +6,7 @@
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
          test_event_fields/1, test_event_namespace/1, test_event_get_int_field/2,
-         log/2]).
+         safe_call_fn/1, log/2]).
 
 %% woof FFI - Erlang target
 %% Global config - stored in persistent_term (erts, always available).
@@ -106,6 +106,17 @@ field_value_to_term({f_map,    Pairs}) ->
         [{K, field_value_to_term(V)} || {K, V} <- Pairs]
     );
 field_value_to_term(f_null) -> null.
+
+%% Call F(), catching any exception so a crashing sink cannot block later ones.
+%% Errors are reported to stderr.
+
+safe_call_fn(F) ->
+    try F() catch
+        Class:Reason ->
+            io:format(standard_error, "[woof] sink crashed ~p:~p~n",
+                      [Class, Reason]),
+            nil
+    end.
 
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 
