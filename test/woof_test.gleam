@@ -1,4 +1,5 @@
 import gleam/dynamic.{type Dynamic}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -2407,7 +2408,10 @@ pub fn do_emit_json_uses_native_types_test() {
 
 pub fn audit_deep_nesting_50_levels_test() {
   let deep =
-    list.fold(list.range(1, 50), woof.FList([woof.vint(0)]), fn(acc, _) {
+    list.fold(
+      int.range(from: 1, to: 51, with: [], run: list.prepend),
+      woof.FList([woof.vint(0)]),
+      fn(acc, _) {
       woof.FList([acc])
     })
   let event =
@@ -2423,7 +2427,10 @@ pub fn audit_deep_nesting_50_levels_test() {
 }
 
 pub fn audit_large_list_500_items_test() {
-  let items = list.map(list.range(1, 500), woof.vint)
+  let items =
+    int.range(from: 1, to: 501, with: [], run: list.prepend)
+    |> list.reverse
+    |> list.map(woof.vint)
   let event =
     woof.LogEvent(
       level: woof.Info,
@@ -2651,4 +2658,102 @@ pub fn format_event_compact_returns_string_test() {
   out |> string.contains("WARN") |> should.be_true
   out |> string.contains("slow") |> should.be_true
   out |> string.contains("ms=1200") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - NaN / Infinity float JSON safety (JavaScript target only)
+// ---------------------------------------------------------------------------
+
+@target(javascript)
+@external(javascript, "./woof_ffi.mjs", "nan_float")
+fn test_nan_float() -> Float
+
+@target(javascript)
+@external(javascript, "./woof_ffi.mjs", "infinity_float")
+fn test_infinity_float() -> Float
+
+@target(javascript)
+pub fn json_nan_float_emits_null_test() {
+  let nan = test_nan_float()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.float("x", nan)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  woof.format_event_json(event) |> string.contains("\"x\":null") |> should.be_true
+}
+
+@target(javascript)
+pub fn json_infinity_float_emits_null_test() {
+  let inf = test_infinity_float()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.float("x", inf)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  woof.format_event_json(event) |> string.contains("\"x\":null") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - ANSI escape sanitisation in Text format
+// ---------------------------------------------------------------------------
+
+pub fn text_ansi_in_message_is_stripped_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "\u{001B}[31mRED\u{001B}[0m injected",
+      fields: [],
+      namespace: None,
+      timestamp: "2026-05-13T10:00:00.000Z",
+    )
+  let out = woof.format(entry, woof.Text)
+  out |> string.contains("\u{001B}") |> should.be_false
+  out |> string.contains("injected") |> should.be_true
+}
+
+pub fn text_ansi_in_field_value_is_stripped_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "msg",
+      fields: [#("evil", "\u{001B}[0mclean")],
+      namespace: None,
+      timestamp: "2026-05-13T10:00:00.000Z",
+    )
+  let out = woof.format(entry, woof.Text)
+  out |> string.contains("\u{001B}") |> should.be_false
+  out |> string.contains("clean") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - Sink crash isolation
+// ---------------------------------------------------------------------------
+
+pub fn crashing_legacy_sink_does_not_block_later_sinks_test() {
+  reset()
+  let #(capture, get) = woof.test_sink()
+  woof.set_event_sink(capture)
+  // First sink panics; event_sink must still receive the event.
+  woof.set_sinks([
+    fn(_entry, _formatted) { panic as "intentional test crash" },
+    woof.silent_sink,
+  ])
+  woof.info("after crash", [])
+  get() |> list.length |> should.equal(1)
+  reset()
+}
+
+pub fn crashing_event_sink_does_not_propagate_test() {
+  reset()
+  // A crashing event sink must not bubble the exception to the caller.
+  woof.set_event_sink(fn(_event) { panic as "event sink crash" })
+  woof.info("safe", [])
+  reset()
 }
