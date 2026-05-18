@@ -10,6 +10,7 @@ import { Ok, Error, toList, prepend } from "./gleam.mjs";
 
 let state = undefined;
 let context = undefined;
+let trace = undefined;
 
 export function get_state(fallback) {
   return state === undefined ? fallback : state;
@@ -27,6 +28,28 @@ export function get_context(fallback) {
 export function set_context(ctx) {
   context = ctx;
   return undefined;
+}
+
+// Scoped trace - module-level variable (JS is single-threaded). The value
+// is a Gleam Option term, stored and returned opaquely.
+export function get_trace(fallback) {
+  return trace === undefined ? fallback : trace;
+}
+
+export function set_trace(t) {
+  trace = t;
+  return undefined;
+}
+
+// Convert an ISO 8601 timestamp to Unix nanoseconds, rendered as a digit
+// string. Returns "0" when the input cannot be parsed. The nanosecond
+// digits are appended as text to avoid Number precision loss.
+export function iso_to_unix_nano(iso) {
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) {
+    return "0";
+  }
+  return String(ms) + "000000";
 }
 
 export function now() {

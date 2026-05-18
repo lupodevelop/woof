@@ -1,5 +1,6 @@
 -module(woof_ffi).
 -export([get_state/1, set_state/1, get_context/1, set_context/1,
+         get_trace/1, set_trace/1, iso_to_unix_nano/1,
          now/0, monotonic_now/0, is_tty/0, get_env/1,
          beam_log/5, beam_event_log/4,
          push_test_event/1, pop_all_test_events/0, clear_test_events/0,
@@ -34,6 +35,32 @@ get_context(Default) ->
 set_context(Ctx) ->
     erlang:put(woof_context, Ctx),
     nil.
+
+%% Scoped trace - stored in the process dictionary so each BEAM process
+%% (= each request handler) gets its own trace.  The value is an Option
+%% term (none or {some, {TraceId, SpanId}}) passed through opaquely.
+
+get_trace(Default) ->
+    case erlang:get(woof_trace) of
+        undefined -> Default;
+        Trace     -> Trace
+    end.
+
+set_trace(Trace) ->
+    erlang:put(woof_trace, Trace),
+    nil.
+
+%% Convert an RFC 3339 timestamp to Unix nanoseconds, rendered as a digit
+%% string.  Returns <<"0">> when the input cannot be parsed.
+
+iso_to_unix_nano(Iso) ->
+    try
+        Nanos = calendar:rfc3339_to_system_time(
+            binary_to_list(Iso), [{unit, nanosecond}]),
+        integer_to_binary(Nanos)
+    catch
+        _:_ -> <<"0">>
+    end.
 
 %% ISO 8601 timestamp with millisecond precision.
 
