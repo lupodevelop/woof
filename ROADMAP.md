@@ -3,7 +3,7 @@
 The path from v1.6 to v2.0. Four releases that take woof from a "data-driven
 logging frontend" to the standard logging library for Gleam.
 
-**Current version:** v1.7.1
+**Current version:** v1.8.0
 
 ## Upcoming releases at a glance
 
@@ -11,7 +11,7 @@ logging frontend" to the standard logging library for Gleam.
 | :------ | :---- | :------------ | :----- |
 | v1.7 | Complete data model | `FList`, `FMap`, `FNull` with native JSON output | shipped |
 | v1.7.1 | Robustness patch | NaN/Inf JSON safety, ANSI strip in Text, sink crash isolation | shipped |
-| v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | planned |
+| v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | shipped |
 | v1.9 | Production hardening | Sampling, rate limiting, redaction, cardinality cap, benchmarks | planned |
 | v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers | planned |
 

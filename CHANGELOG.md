@@ -3,6 +3,55 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-05-17
+
+### Added
+
+- **Trace correlation.** Three entry points tie logs to a distributed trace
+  using the OpenTelemetry-conventional `trace_id` and `span_id` field names:
+
+  - `with_trace(trace_id, span_id, body)` attaches a trace to every log
+    emitted inside `body`. Traces nest and restore on return.
+  - `set_trace(logger, trace_id, span_id) -> Logger` returns a logger that
+    carries a trace on every call. A logger trace wins over a scoped one.
+  - `current_trace() -> Option(#(String, String))` reads the scoped trace.
+
+  ```gleam
+  woof.with_trace(trace_id, span_id, fn() {
+    woof.info("payment captured", [woof.int("amount_cents", 4200)])
+  })
+  ```
+
+- **`Format.OtlpJson`** - a new output format producing one
+  OpenTelemetry-shaped JSON object per line: `timestamp_unix_nano`,
+  `severity_number`, `severity_text`, `body`, `attributes`, and, when
+  present, `trace_id`, `span_id`, and `resource`.
+
+- **`format_event_otlp(LogEvent) -> String`** - public OTLP formatter for
+  users writing custom sinks.
+
+- **`set_resource(attrs)` / `get_resource()`** - OpenTelemetry resource
+  attributes (`service.name`, `service.version`, and so on). Resource
+  attributes describe the service rather than any single event and are
+  emitted under `resource` by the `OtlpJson` format.
+
+### Changed
+
+- **`Format` has a new `OtlpJson` variant.** Code that pattern-matches
+  exhaustively on `Format` needs a branch for it.
+
+- **`Logger` carries an optional trace.** The type is opaque, so this is not
+  a breaking change; `child` now inherits the parent's trace.
+
+### Maintenance
+
+- New tests cover trace propagation, OTLP output, and resource attributes.
+- `do_emit` builds the `LogEvent` once and routes `Json` / `OtlpJson`
+  through the typed formatters.
+- `woof_ffi.erl` / `woof_ffi.mjs`: added `get_trace`, `set_trace`, and
+  `iso_to_unix_nano`.
+- New documentation: `docs/semantic_conventions.md`, `docs/log_levels.md`.
+
 ## [1.7.1] - 2026-05-13
 
 ### Fixed
@@ -24,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Maintenance
 
-- 6 new tests covering all three fixes.
+- New tests cover all three fixes.
 - `woof_ffi.erl`: added `safe_call_fn/1` with stderr crash reporting.
 - `woof_ffi.mjs`: added `safe_call_fn`, `nan_float`, `infinity_float`.
 
@@ -440,7 +489,7 @@ They remain in the public API until v2.0:
   `time`), and convenience configuration functions (`configure`, `set_level`,
   `set_format`, `set_colors`).
 - Cross-platform support: identical behaviour on BEAM and JavaScript targets.
-- Test suite (34 tests) and documentation in README and project reference.
+- Test suite and documentation in README and project reference.
 
 [1.7.0]: https://hex.pm/packages/woof/1.7.0
 [1.6.0]: https://hex.pm/packages/woof/1.6.0
