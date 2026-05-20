@@ -12,17 +12,19 @@ For upgrading from v1.2 see [migration_v1_3.md](migration_v1_3.md).
 2. [Typed fields](#typed-fields)
 3. [Levels and filtering](#levels-and-filtering)
 4. [Formats](#formats)
-5. [Namespaced loggers](#namespaced-loggers)
-6. [Context](#context)
-7. [Sinks](#sinks)
-8. [Testing](#testing)
-9. [Lazy evaluation](#lazy-evaluation)
-10. [Pipeline helpers](#pipeline-helpers)
-11. [Configuration](#configuration)
-12. [Colors](#colors)
-13. [BEAM logger integration](#beam-logger-integration)
-14. [Cross-platform notes](#cross-platform-notes)
-15. [API reference](#api-reference)
+5. [Trace correlation](#trace-correlation-v18)
+6. [Resource attributes](#resource-attributes-v18)
+7. [Namespaced loggers](#namespaced-loggers)
+8. [Context](#context)
+9. [Sinks](#sinks)
+10. [Testing](#testing)
+11. [Lazy evaluation](#lazy-evaluation)
+12. [Pipeline helpers](#pipeline-helpers)
+13. [Configuration](#configuration)
+14. [Colors](#colors)
+15. [BEAM logger integration](#beam-logger-integration)
+16. [Cross-platform notes](#cross-platform-notes)
+17. [API reference](#api-reference)
 
 ---
 
@@ -267,6 +269,46 @@ INFO 2026-02-11T10:30:45.123Z User signed in user_id=u_123 method=oauth
 
 Values that contain spaces, `=`, or are empty are automatically quoted.
 
+### OtlpJson (v1.8)
+
+One OpenTelemetry-shaped JSON object per line. Use this to feed an OTLP log
+pipeline.
+
+```gleam
+woof.set_format(woof.OtlpJson)
+```
+
+```json
+{"timestamp_unix_nano":1779000000000000000,"severity_number":9,"severity_text":"INFO","body":"User signed in","attributes":{"user_id":"u_123"}}
+```
+
+The output carries:
+
+| Key | Meaning |
+| :-- | :------ |
+| `timestamp_unix_nano` | Event time as Unix nanoseconds (`0` if unparseable) |
+| `severity_number` | OpenTelemetry severity on the 1..24 scale |
+| `severity_text` | `DEBUG`, `INFO`, `WARN`, and so on |
+| `body` | The log message |
+| `attributes` | The event fields, with native JSON types |
+| `trace_id`, `span_id` | Present when a trace is in scope |
+| `resource` | Present when resource attributes are set |
+
+Severity mapping for the eight levels:
+
+| Level | `severity_number` | `severity_text` |
+| :---- | :-: | :-- |
+| `Debug` | 5 | `DEBUG` |
+| `Info` | 9 | `INFO` |
+| `Notice` | 10 | `INFO2` |
+| `Warning` | 13 | `WARN` |
+| `Error` | 17 | `ERROR` |
+| `Critical` | 18 | `ERROR2` |
+| `Alert` | 21 | `FATAL` |
+| `Emergency` | 24 | `FATAL4` |
+
+To format a `LogEvent` as OTLP without emitting it, use `format_event_otlp`.
+
 ### Custom
 
 Plug in any function that takes an `Entry` and returns a `String`:
@@ -282,6 +324,74 @@ woof.set_format(woof.Custom(my_format))
 The `Entry` type carries `level`, `message`, `fields` (as `List(#(String, String))`),
 `namespace`, and `timestamp`. If you need the original `FieldValue` types, use
 an `EventSink` instead.
+
+---
+
+## Trace correlation (v1.8)
+
+Trace correlation ties a log line to a distributed trace. woof writes the
+`trace_id` and `span_id` fields for you, using the OpenTelemetry-conventional
+names.
+
+### Scoped: `with_trace`
+
+Every log emitted inside the body carries the trace. Traces nest, and the
+outer trace is restored when the inner body returns.
+
+```gleam
+woof.with_trace(trace_id, span_id, fn() {
+  woof.info("handling request", [])
+  // fields: trace_id=..., span_id=...
+})
+```
+
+On the BEAM the trace lives in the process dictionary, so concurrent request
+handlers never share a trace. On JavaScript the same single-threaded caveat as
+`with_context` applies.
+
+### Instanced: `set_trace`
+
+`set_trace` returns a logger that carries a trace on every call. A logger
+trace takes precedence over a scoped one.
+
+```gleam
+let req = woof.new("http") |> woof.set_trace(trace_id, span_id)
+req |> woof.log(woof.Info, "request handled", [])
+```
+
+`child` loggers inherit the parent's trace.
+
+### Reading: `current_trace`
+
+```gleam
+woof.with_trace("t", "s", fn() {
+  woof.current_trace()  // Some(#("t", "s"))
+})
+woof.current_trace()    // None
+```
+
+`current_trace` reports only the scoped trace, not a logger trace.
+
+---
+
+## Resource attributes (v1.8)
+
+Resource attributes describe the service itself rather than any single event:
+`service.name`, `service.version`, and so on. Set them once at startup. The
+`OtlpJson` format emits them under a `resource` object; other formats ignore
+them.
+
+```gleam
+woof.set_resource([
+  woof.str("service.name", "checkout"),
+  woof.str("service.version", "1.8.0"),
+])
+
+woof.get_resource()  // the current resource attributes
+```
+
+See [semantic_conventions.md](semantic_conventions.md) for the recommended
+field names.
 
 ---
 
@@ -914,9 +1024,10 @@ behave identically on both targets.
 | Function | Signature | Description |
 | :--- | :--- | :--- |
 | `new` | `(String) -> Logger` | Create a namespaced logger |
-| `child` | `(Logger, String) -> Logger` | Sub-namespace logger inheriting parent context |
+| `child` | `(Logger, String) -> Logger` | Sub-namespace logger inheriting parent context and trace |
 | `set_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Replace logger's instance context |
 | `append_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Add fields to instance context |
+| `set_trace` | `(Logger, String, String) -> Logger` | Attach a trace and span to a logger (v1.8) |
 | `log` | `(Logger, Level, String, List(#(String, FieldValue))) -> Nil` | Log through a namespace |
 
 ### Field constructors
@@ -980,6 +1091,15 @@ behave identically on both targets.
 | `get_global_context` | `() -> List(#(String, FieldValue))` | Read current global ctx |
 | `append_global_context` | `(List(#(String, FieldValue))) -> Nil` | Add to global ctx |
 
+### Trace correlation and resource (v1.8)
+
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `with_trace` | `(String, String, fn() -> a) -> a` | Scoped trace for every log in the body |
+| `current_trace` | `() -> Option(#(String, String))` | Read the scoped trace |
+| `set_resource` | `(List(#(String, FieldValue))) -> Nil` | Set OpenTelemetry resource attributes |
+| `get_resource` | `() -> List(#(String, FieldValue))` | Read resource attributes |
+
 ### Pipeline helpers
 
 | Function | Description |
@@ -999,5 +1119,6 @@ behave identically on both targets.
 | `format_event_json(LogEvent) -> String` | Public JSON formatter, native typed values (v1.7) |
 | `format_event_text(LogEvent, ColorMode) -> String` | Public Text formatter (v1.7) |
 | `format_event_compact(LogEvent) -> String` | Public Compact formatter (v1.7) |
+| `format_event_otlp(LogEvent) -> String` | Public OTLP JSON formatter (v1.8) |
 | `level_name(Level) -> String` | `Warning` to `"warning"` |
 | `level_to_int(Level) -> Int` | `Warning` to `3` (OTP / syslog ordinal) |
