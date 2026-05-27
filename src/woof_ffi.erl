@@ -1,12 +1,13 @@
 -module(woof_ffi).
 -export([get_state/1, set_state/1, get_context/1, set_context/1,
+         get_trace/1, set_trace/1, iso_to_unix_nano/1,
          now/0, monotonic_now/0, is_tty/0, get_env/1,
          beam_log/5, beam_event_log/4,
          push_test_event/1, pop_all_test_events/0, clear_test_events/0,
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
          test_event_fields/1, test_event_namespace/1, test_event_get_int_field/2,
-         log/2]).
+         safe_call_fn/1, log/2]).
 
 %% woof FFI - Erlang target
 %% Global config - stored in persistent_term (erts, always available).
@@ -34,6 +35,32 @@ get_context(Default) ->
 set_context(Ctx) ->
     erlang:put(woof_context, Ctx),
     nil.
+
+%% Scoped trace - stored in the process dictionary so each BEAM process
+%% (= each request handler) gets its own trace.  The value is an Option
+%% term (none or {some, {TraceId, SpanId}}) passed through opaquely.
+
+get_trace(Default) ->
+    case erlang:get(woof_trace) of
+        undefined -> Default;
+        Trace     -> Trace
+    end.
+
+set_trace(Trace) ->
+    erlang:put(woof_trace, Trace),
+    nil.
+
+%% Convert an RFC 3339 timestamp to Unix nanoseconds, rendered as a digit
+%% string.  Returns <<"0">> when the input cannot be parsed.
+
+iso_to_unix_nano(Iso) ->
+    try
+        Nanos = calendar:rfc3339_to_system_time(
+            binary_to_list(Iso), [{unit, nanosecond}]),
+        integer_to_binary(Nanos)
+    catch
+        _:_ -> <<"0">>
+    end.
 
 %% ISO 8601 timestamp with millisecond precision.
 
@@ -106,6 +133,17 @@ field_value_to_term({f_map,    Pairs}) ->
         [{K, field_value_to_term(V)} || {K, V} <- Pairs]
     );
 field_value_to_term(f_null) -> null.
+
+%% Call F(), catching any exception so a crashing sink cannot block later ones.
+%% Errors are reported to stderr.
+
+safe_call_fn(F) ->
+    try F() catch
+        Class:Reason ->
+            io:format(standard_error, "[woof] sink crashed ~p:~p~n",
+                      [Class, Reason]),
+            nil
+    end.
 
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 

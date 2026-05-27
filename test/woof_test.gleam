@@ -1,4 +1,5 @@
 import gleam/dynamic.{type Dynamic}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -21,6 +22,7 @@ fn reset() {
     colors: woof.Never,
   ))
   woof.set_global_context([])
+  woof.set_resource([])
   woof.set_sink(woof.silent_sink)
   woof.clear_event_sink()
 }
@@ -2407,9 +2409,11 @@ pub fn do_emit_json_uses_native_types_test() {
 
 pub fn audit_deep_nesting_50_levels_test() {
   let deep =
-    list.fold(list.range(1, 50), woof.FList([woof.vint(0)]), fn(acc, _) {
-      woof.FList([acc])
-    })
+    list.fold(
+      int.range(from: 1, to: 51, with: [], run: list.prepend),
+      woof.FList([woof.vint(0)]),
+      fn(acc, _) { woof.FList([acc]) },
+    )
   let event =
     woof.LogEvent(
       level: woof.Info,
@@ -2423,7 +2427,10 @@ pub fn audit_deep_nesting_50_levels_test() {
 }
 
 pub fn audit_large_list_500_items_test() {
-  let items = list.map(list.range(1, 500), woof.vint)
+  let items =
+    int.range(from: 1, to: 501, with: [], run: list.prepend)
+    |> list.reverse
+    |> list.map(woof.vint)
   let event =
     woof.LogEvent(
       level: woof.Info,
@@ -2651,4 +2658,545 @@ pub fn format_event_compact_returns_string_test() {
   out |> string.contains("WARN") |> should.be_true
   out |> string.contains("slow") |> should.be_true
   out |> string.contains("ms=1200") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - NaN / Infinity float JSON safety (JavaScript target only)
+// ---------------------------------------------------------------------------
+
+@target(javascript)
+@external(javascript, "./woof_ffi.mjs", "nan_float")
+fn test_nan_float() -> Float
+
+@target(javascript)
+@external(javascript, "./woof_ffi.mjs", "infinity_float")
+fn test_infinity_float() -> Float
+
+@target(javascript)
+pub fn json_nan_float_emits_null_test() {
+  let nan = test_nan_float()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.float("x", nan)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  woof.format_event_json(event)
+  |> string.contains("\"x\":null")
+  |> should.be_true
+}
+
+@target(javascript)
+pub fn json_infinity_float_emits_null_test() {
+  let inf = test_infinity_float()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.float("x", inf)],
+      timestamp: "ts",
+      namespace: None,
+    )
+  woof.format_event_json(event)
+  |> string.contains("\"x\":null")
+  |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - ANSI escape sanitisation in Text format
+// ---------------------------------------------------------------------------
+
+pub fn text_ansi_in_message_is_stripped_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "\u{001B}[31mRED\u{001B}[0m injected",
+      fields: [],
+      namespace: None,
+      timestamp: "2026-05-13T10:00:00.000Z",
+    )
+  let out = woof.format(entry, woof.Text)
+  out |> string.contains("\u{001B}") |> should.be_false
+  out |> string.contains("injected") |> should.be_true
+}
+
+pub fn text_ansi_in_field_value_is_stripped_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: "msg",
+      fields: [#("evil", "\u{001B}[0mclean")],
+      namespace: None,
+      timestamp: "2026-05-13T10:00:00.000Z",
+    )
+  let out = woof.format(entry, woof.Text)
+  out |> string.contains("\u{001B}") |> should.be_false
+  out |> string.contains("clean") |> should.be_true
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 - Sink crash isolation
+// ---------------------------------------------------------------------------
+
+pub fn crashing_legacy_sink_does_not_block_later_sinks_test() {
+  reset()
+  let #(capture, get) = woof.test_sink()
+  woof.set_event_sink(capture)
+  // First sink panics; event_sink must still receive the event.
+  woof.set_sinks([
+    fn(_entry, _formatted) { panic as "intentional test crash" },
+    woof.silent_sink,
+  ])
+  woof.info("after crash", [])
+  get() |> list.length |> should.equal(1)
+  reset()
+}
+
+pub fn crashing_event_sink_does_not_propagate_test() {
+  reset()
+  // A crashing event sink must not bubble the exception to the caller.
+  woof.set_event_sink(fn(_event) { panic as "event sink crash" })
+  woof.info("safe", [])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.8 - trace correlation (with_trace / set_trace / current_trace)
+// ---------------------------------------------------------------------------
+
+pub fn current_trace_none_by_default_test() {
+  reset()
+  woof.current_trace() |> should.equal(None)
+  reset()
+}
+
+pub fn with_trace_sets_scoped_trace_test() {
+  reset()
+  woof.with_trace("trace-abc", "span-123", fn() {
+    woof.current_trace() |> should.equal(Some(#("trace-abc", "span-123")))
+  })
+  reset()
+}
+
+pub fn with_trace_restores_after_body_test() {
+  reset()
+  woof.with_trace("t", "s", fn() { Nil })
+  woof.current_trace() |> should.equal(None)
+  reset()
+}
+
+pub fn with_trace_returns_body_value_test() {
+  reset()
+  let result = woof.with_trace("t", "s", fn() { 42 })
+  result |> should.equal(42)
+  reset()
+}
+
+pub fn with_trace_injects_trace_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.with_trace("trace-xyz", "span-789", fn() {
+    woof.info("inside span", [woof.str("k", "v")])
+  })
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("trace_id", woof.FString("trace-xyz")),
+    #("span_id", woof.FString("span-789")),
+    #("k", woof.FString("v")),
+  ])
+  reset()
+}
+
+pub fn with_trace_nested_restores_outer_test() {
+  reset()
+  woof.with_trace("outer-t", "outer-s", fn() {
+    woof.with_trace("inner-t", "inner-s", fn() {
+      woof.current_trace() |> should.equal(Some(#("inner-t", "inner-s")))
+    })
+    woof.current_trace() |> should.equal(Some(#("outer-t", "outer-s")))
+  })
+  reset()
+}
+
+pub fn log_outside_trace_has_no_trace_fields_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.info("no trace", [woof.str("k", "v")])
+
+  let assert [event] = get()
+  event.fields |> should.equal([#("k", woof.FString("v"))])
+  reset()
+}
+
+pub fn set_trace_carries_trace_on_logger_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("svc") |> woof.set_trace("log-t", "log-s")
+  log |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("trace_id", woof.FString("log-t")),
+    #("span_id", woof.FString("log-s")),
+  ])
+  reset()
+}
+
+pub fn set_trace_does_not_mutate_parent_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let parent = woof.new("svc")
+  let _traced = parent |> woof.set_trace("t", "s")
+  parent |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  event.fields |> should.equal([])
+  reset()
+}
+
+pub fn child_inherits_parent_trace_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let parent = woof.new("svc") |> woof.set_trace("pt", "ps")
+  let kid = woof.child(parent, "db")
+  kid |> woof.log(woof.Info, "msg", [])
+
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("svc.db"))
+  event.fields
+  |> should.equal([
+    #("trace_id", woof.FString("pt")),
+    #("span_id", woof.FString("ps")),
+  ])
+  reset()
+}
+
+pub fn set_trace_wins_over_scoped_trace_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let log = woof.new("svc") |> woof.set_trace("logger-t", "logger-s")
+  woof.with_trace("scoped-t", "scoped-s", fn() {
+    log |> woof.log(woof.Info, "msg", [])
+  })
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("trace_id", woof.FString("logger-t")),
+    #("span_id", woof.FString("logger-s")),
+  ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.8 - resource attributes (set_resource / get_resource)
+// ---------------------------------------------------------------------------
+
+pub fn get_resource_empty_by_default_test() {
+  reset()
+  woof.get_resource() |> should.equal([])
+  reset()
+}
+
+pub fn set_resource_get_resource_roundtrip_test() {
+  reset()
+  woof.set_resource([
+    woof.str("service.name", "api"),
+    woof.str("service.version", "1.8.0"),
+  ])
+  woof.get_resource()
+  |> should.equal([
+    #("service.name", woof.FString("api")),
+    #("service.version", woof.FString("1.8.0")),
+  ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.8 - OTLP JSON output
+// ---------------------------------------------------------------------------
+
+pub fn otlp_emits_severity_number_and_text_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "login",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"severity_number\":9") |> should.be_true
+  out |> string.contains("\"severity_text\":\"INFO\"") |> should.be_true
+}
+
+pub fn otlp_emits_body_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Warning,
+      message: "slow query",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"body\":\"slow query\"") |> should.be_true
+}
+
+pub fn otlp_emits_typed_attributes_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.int("http.status_code", 200), woof.bool("cached", True)],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out
+  |> string.contains(
+    "\"attributes\":{\"http.status_code\":200,\"cached\":true}",
+  )
+  |> should.be_true
+}
+
+pub fn otlp_empty_attributes_is_object_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"attributes\":{}") |> should.be_true
+}
+
+pub fn otlp_promotes_trace_id_span_id_to_top_level_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [
+        woof.str("trace_id", "0af7651916cd43dd"),
+        woof.str("span_id", "b7ad6b7169203331"),
+        woof.int("n", 1),
+      ],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"trace_id\":\"0af7651916cd43dd\"") |> should.be_true
+  out |> string.contains("\"span_id\":\"b7ad6b7169203331\"") |> should.be_true
+  // trace ids must not leak into attributes
+  out |> string.contains("\"attributes\":{\"n\":1}") |> should.be_true
+}
+
+pub fn otlp_omits_trace_when_absent_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("trace_id") |> should.be_false
+  out |> string.contains("span_id") |> should.be_false
+}
+
+pub fn otlp_emits_resource_test() {
+  reset()
+  woof.set_resource([woof.str("service.name", "api")])
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out
+  |> string.contains("\"resource\":{\"service.name\":\"api\"}")
+  |> should.be_true
+  reset()
+}
+
+pub fn otlp_omits_resource_when_empty_test() {
+  reset()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("resource") |> should.be_false
+  reset()
+}
+
+pub fn otlp_timestamp_unix_nano_is_numeric_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"timestamp_unix_nano\":") |> should.be_true
+  // value is an unquoted number, not a string
+  out |> string.contains("\"timestamp_unix_nano\":\"") |> should.be_false
+  // a real timestamp must not collapse to 0
+  out |> string.contains("\"timestamp_unix_nano\":0") |> should.be_false
+}
+
+pub fn otlp_invalid_timestamp_falls_back_to_zero_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "not-a-timestamp",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"timestamp_unix_nano\":0") |> should.be_true
+}
+
+pub fn otlp_severity_mapping_all_levels_test() {
+  let check = fn(level: woof.Level, number: String, text: String) {
+    let event =
+      woof.LogEvent(
+        level: level,
+        message: "m",
+        fields: [],
+        timestamp: "2026-04-25T00:00:00.000Z",
+        namespace: None,
+      )
+    let out = woof.format_event_otlp(event)
+    out |> string.contains("\"severity_number\":" <> number) |> should.be_true
+    out
+    |> string.contains("\"severity_text\":\"" <> text <> "\"")
+    |> should.be_true
+  }
+  check(woof.Debug, "5", "DEBUG")
+  check(woof.Info, "9", "INFO")
+  check(woof.Notice, "10", "INFO2")
+  check(woof.Warning, "13", "WARN")
+  check(woof.Error, "17", "ERROR")
+  check(woof.Critical, "18", "ERROR2")
+  check(woof.Alert, "21", "FATAL")
+  check(woof.Emergency, "24", "FATAL4")
+}
+
+pub fn otlp_carries_namespace_in_attributes_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [woof.int("n", 1)],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: Some("http.router"),
+    )
+  let out = woof.format_event_otlp(event)
+  out
+  |> string.contains("\"attributes\":{\"namespace\":\"http.router\",\"n\":1}")
+  |> should.be_true
+}
+
+pub fn otlp_omits_namespace_when_absent_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "m",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("namespace") |> should.be_false
+}
+
+pub fn otlp_escapes_body_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "say \"hi\"",
+      fields: [],
+      timestamp: "2026-04-25T00:00:00.000Z",
+      namespace: None,
+    )
+  let out = woof.format_event_otlp(event)
+  out |> string.contains("\"body\":\"say \\\"hi\\\"\"") |> should.be_true
+}
+
+pub fn do_emit_otlp_routes_through_typed_formatter_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.OtlpJson,
+    colors: woof.Never,
+  ))
+  woof.set_sink(fn(_entry, formatted) {
+    formatted |> string.contains("\"severity_number\":9") |> should.be_true
+    formatted
+    |> string.contains("\"attributes\":{\"port\":3000}")
+    |> should.be_true
+  })
+  woof.info("boot", [woof.int("port", 3000)])
+  reset()
+}
+
+pub fn do_emit_otlp_includes_trace_from_with_trace_test() {
+  reset()
+  woof.configure(woof.Config(
+    level: woof.Debug,
+    format: woof.OtlpJson,
+    colors: woof.Never,
+  ))
+  woof.set_sink(fn(_entry, formatted) {
+    formatted |> string.contains("\"trace_id\":\"tt\"") |> should.be_true
+    formatted |> string.contains("\"span_id\":\"ss\"") |> should.be_true
+  })
+  woof.with_trace("tt", "ss", fn() { woof.info("traced", []) })
+  reset()
+}
+
+pub fn format_with_otlpjson_on_entry_path_test() {
+  let entry =
+    woof.Entry(
+      level: woof.Error,
+      message: "boom",
+      fields: [#("code", "500")],
+      namespace: None,
+      timestamp: "2026-04-25T00:00:00.000Z",
+    )
+  let out = woof.format(entry, woof.OtlpJson)
+  out |> string.contains("\"severity_number\":17") |> should.be_true
+  out |> string.contains("\"body\":\"boom\"") |> should.be_true
+  out |> string.contains("\"attributes\":{\"code\":\"500\"}") |> should.be_true
 }

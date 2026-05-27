@@ -1,3 +1,5 @@
+> ℹ️ **v1.8** adds trace correlation (`with_trace`, `set_trace`, `current_trace`), the `OtlpJson` format with `format_event_otlp`, and OpenTelemetry resource attributes (`set_resource`, `get_resource`).
+>
 > ℹ️ **v1.7** adds `FList`/`FMap`/`FNull` variants, `list`/`map`/`null` constructors, `vstr`/`vint`/`vfloat`/`vbool`/`vnull` raw helpers, native typed JSON output, and public `format_event_*` helpers.
 >
 > ℹ️ **v1.6** adds `child` loggers, `filter_event_sink`, public `emit(LogEvent)`, and public `level_to_int`. No breaking changes.
@@ -180,13 +182,41 @@ woof.level_from_string("critical")  // Ok(Critical)
 woof.get_level()                    // current Level
 ```
 
+## Trace correlation and OpenTelemetry
+
+Tie logs to a distributed trace. Inside `with_trace`, every log carries
+`trace_id` and `span_id`:
+
+```gleam
+woof.with_trace(trace_id, span_id, fn() {
+  woof.info("payment captured", [woof.int("amount_cents", 4200)])
+})
+```
+
+Set OpenTelemetry resource attributes once at startup, then switch the format
+to `OtlpJson` for an OpenTelemetry-shaped object per line:
+
+```gleam
+woof.set_resource([
+  woof.str("service.name", "checkout"),
+  woof.str("service.version", "1.8.0"),
+])
+woof.configure(woof.Config(woof.Info, woof.OtlpJson, woof.Never))
+```
+
+```json
+{"timestamp_unix_nano":1779000000000000000,"severity_number":9,"severity_text":"INFO","body":"payment captured","trace_id":"...","span_id":"...","resource":{"service.name":"checkout"},"attributes":{"amount_cents":4200}}
+```
+
 ## Documentation
 
 | Document | Contents |
 | :--- | :--- |
 | [docs/guide.md](docs/guide.md) | Full reference: levels, formats, sinks, context, BEAM integration, API table |
+| [docs/semantic_conventions.md](docs/semantic_conventions.md) | Standard field names for queryable logs |
+| [docs/log_levels.md](docs/log_levels.md) | Choosing the right log level |
 | [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 - what changed and how to fix it |
-| [roadmap.md](roadmap.md) | Future releases v1.7 to v2.0 |
+| [roadmap.md](roadmap.md) | Future releases v1.8 to v2.0 |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [hexdocs.pm/woof](https://hexdocs.pm/woof/) | Generated module reference |
 

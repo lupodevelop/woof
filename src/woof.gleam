@@ -75,6 +75,9 @@ pub type Level {
 ///   aggregation tools.
 /// - `Compact` - single-line, key=value pairs.  A middle ground between
 ///   `Text` readability and `Json` parsability.
+/// - `OtlpJson` - one OpenTelemetry-shaped JSON object per line, with
+///   `severity_number`, `body`, `attributes`, and (when present) `trace_id`,
+///   `span_id`, and `resource`.  Use this to feed an OTLP log pipeline.
 /// - `Custom` - bring your own formatter. The function receives a fully
 ///   assembled `Entry` and must return the string to print.  This is the
 ///   escape hatch for integrating with other formatting or output libraries.
@@ -82,6 +85,7 @@ pub type Format {
   Text
   Json
   Compact
+  OtlpJson
   Custom(formatter: fn(Entry) -> String)
 }
 
@@ -141,7 +145,11 @@ pub type Entry {
 /// db |> woof.log(woof.Info, "query ok", [woof.int("ms", 12)])
 /// ```
 pub opaque type Logger {
-  Logger(namespace: Option(String), context: List(#(String, FieldValue)))
+  Logger(
+    namespace: Option(String),
+    context: List(#(String, FieldValue)),
+    trace: Option(#(String, String)),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -340,10 +348,12 @@ pub fn emit(event: LogEvent) -> Nil {
       timestamp: event.timestamp,
     )
   let formatted = format_entry(entry, state.format, state.colors)
-  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
+  list.each(state.sinks, fn(sink) {
+    ffi_safe_call(fn() { sink(entry, formatted) })
+  })
   case state.event_sink {
     None -> Nil
-    Some(event_sink_fn) -> event_sink_fn(event)
+    Some(event_sink_fn) -> ffi_safe_call(fn() { event_sink_fn(event) })
   }
 }
 
@@ -472,45 +482,45 @@ pub fn test_sink() -> #(EventSink, fn() -> List(LogEvent)) {
 
 /// Log at Debug level.
 pub fn debug(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Debug, message, fields, None)
+  do_log(Debug, message, fields, None, None)
 }
 
 /// Log at Info level.
 pub fn info(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Info, message, fields, None)
+  do_log(Info, message, fields, None, None)
 }
 
 /// Log at Warning level.
 pub fn warning(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Warning, message, fields, None)
+  do_log(Warning, message, fields, None, None)
 }
 
 /// Log at Error level.
 pub fn error(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Error, message, fields, None)
+  do_log(Error, message, fields, None, None)
 }
 
 /// Log at Notice level.  Use for significant business events that are not
 /// errors - successful deployments, config reloads, scheduled task completions.
 pub fn notice(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Notice, message, fields, None)
+  do_log(Notice, message, fields, None, None)
 }
 
 /// Log at Critical level.  Use when the system is partially degraded and
 /// immediate investigation is required.
 pub fn critical(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Critical, message, fields, None)
+  do_log(Critical, message, fields, None, None)
 }
 
 /// Log at Alert level.  Use when automatic action is insufficient and a
 /// human must intervene right away.
 pub fn alert(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Alert, message, fields, None)
+  do_log(Alert, message, fields, None, None)
 }
 
 /// Log at Emergency level.  Use when the system is completely unusable.
 pub fn emergency(message: String, fields: List(#(String, FieldValue))) -> Nil {
-  do_log(Emergency, message, fields, None)
+  do_log(Emergency, message, fields, None, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +534,7 @@ pub fn debug_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Debug, build, fields, None)
+  emit_lazy(Debug, build, fields, None, None)
 }
 
 /// Log at Info level, evaluating the message only if Info is enabled.
@@ -532,7 +542,7 @@ pub fn info_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Info, build, fields, None)
+  emit_lazy(Info, build, fields, None, None)
 }
 
 /// Log at Warning level, evaluating the message only if Warning is enabled.
@@ -540,7 +550,7 @@ pub fn warning_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Warning, build, fields, None)
+  emit_lazy(Warning, build, fields, None, None)
 }
 
 /// Log at Error level, evaluating the message only if Error is enabled.
@@ -548,7 +558,7 @@ pub fn error_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Error, build, fields, None)
+  emit_lazy(Error, build, fields, None, None)
 }
 
 /// Log at Notice level, evaluating the message only if Notice is enabled.
@@ -556,7 +566,7 @@ pub fn notice_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Notice, build, fields, None)
+  emit_lazy(Notice, build, fields, None, None)
 }
 
 /// Log at Critical level, evaluating the message only if Critical is enabled.
@@ -564,7 +574,7 @@ pub fn critical_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Critical, build, fields, None)
+  emit_lazy(Critical, build, fields, None, None)
 }
 
 /// Log at Alert level, evaluating the message only if Alert is enabled.
@@ -572,7 +582,7 @@ pub fn alert_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Alert, build, fields, None)
+  emit_lazy(Alert, build, fields, None, None)
 }
 
 /// Log at Emergency level, evaluating the message only if Emergency is enabled.
@@ -580,7 +590,7 @@ pub fn emergency_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  emit_lazy(Emergency, build, fields, None)
+  emit_lazy(Emergency, build, fields, None, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -592,7 +602,7 @@ pub fn emergency_lazy(
 /// The namespace is prepended to every message formatted with `Text` and
 /// included as a `"ns"` field in `Json` output.
 pub fn new(namespace: String) -> Logger {
-  Logger(namespace: Some(namespace), context: [])
+  Logger(namespace: Some(namespace), context: [], trace: None)
 }
 
 /// Create a child logger that inherits the parent's context and appends a
@@ -606,13 +616,14 @@ pub fn new(namespace: String) -> Logger {
 ///
 /// Loggers are immutable - mutating the child via `set_context` /
 /// `append_context` does not affect the parent.  If the parent has no
-/// namespace, the child uses the suffix as its full namespace.
+/// namespace, the child uses the suffix as its full namespace.  The child
+/// inherits the parent's trace, if one was set with `set_trace`.
 pub fn child(parent: Logger, suffix: String) -> Logger {
   let namespace = case parent.namespace {
     None -> Some(suffix)
     Some(parent_ns) -> Some(parent_ns <> "." <> suffix)
   }
-  Logger(namespace: namespace, context: parent.context)
+  Logger(namespace: namespace, context: parent.context, trace: parent.trace)
 }
 
 /// Attach per-instance context fields to a logger.
@@ -646,6 +657,22 @@ pub fn append_context(
   Logger(..logger, context: list.append(logger.context, fields))
 }
 
+/// Attach a trace and span to a logger.
+///
+/// Every message logged through the returned logger carries `trace_id` and
+/// `span_id` fields, using the OpenTelemetry-conventional names.  Returns a
+/// new `Logger`; the original is unchanged.
+///
+/// A logger trace takes precedence over a scoped trace from `with_trace`.
+///
+/// ```gleam
+/// let req = woof.new("http") |> woof.set_trace(trace_id, span_id)
+/// req |> woof.log(woof.Info, "request handled", [])
+/// ```
+pub fn set_trace(logger: Logger, trace_id: String, span_id: String) -> Logger {
+  Logger(..logger, trace: Some(#(trace_id, span_id)))
+}
+
 /// Log a message through a namespaced logger.
 ///
 /// Logger context fields (set via `set_context`) are prepended to inline fields.
@@ -655,7 +682,13 @@ pub fn log(
   message: String,
   fields: List(#(String, FieldValue)),
 ) -> Nil {
-  do_log(level, message, list.append(logger.context, fields), logger.namespace)
+  do_log(
+    level,
+    message,
+    list.append(logger.context, fields),
+    logger.namespace,
+    logger.trace,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -844,6 +877,73 @@ pub fn get_global_context() -> List(#(String, FieldValue)) {
 pub fn append_global_context(fields: List(#(String, FieldValue))) -> Nil {
   let current = get_global_context()
   set_global_context(list.append(current, fields))
+}
+
+// ---------------------------------------------------------------------------
+// Trace correlation (v1.8)
+// ---------------------------------------------------------------------------
+
+/// Run `body` with a trace and span attached to every log call inside it.
+///
+/// Each log emitted within `body` carries `trace_id` and `span_id` fields,
+/// using the OpenTelemetry-conventional names.  Traces nest: an inner
+/// `with_trace` shadows an outer one and the outer trace is restored when
+/// the inner body returns.
+///
+/// On the BEAM the trace lives in the process dictionary, so concurrent
+/// request handlers never share a trace.  The JavaScript caveat from
+/// `with_context` applies here too.
+///
+/// ```gleam
+/// woof.with_trace(trace_id, span_id, fn() {
+///   woof.info("handling request", [])
+/// })
+/// ```
+pub fn with_trace(trace_id: String, span_id: String, body: fn() -> a) -> a {
+  let previous = ffi_get_trace(None)
+  ffi_set_trace(Some(#(trace_id, span_id)))
+  let value = body()
+  ffi_set_trace(previous)
+  value
+}
+
+/// Read the trace currently in scope, if any.
+///
+/// Returns `Some(#(trace_id, span_id))` when called inside a `with_trace`
+/// body, and `None` otherwise.  A logger trace set with `set_trace` is not
+/// reported here; this reads only the scoped trace.
+pub fn current_trace() -> Option(#(String, String)) {
+  ffi_get_trace(None)
+}
+
+// ---------------------------------------------------------------------------
+// Resource attributes (v1.8)
+// ---------------------------------------------------------------------------
+
+/// Set the OpenTelemetry resource attributes.
+///
+/// Resource attributes describe the entity producing the logs (the service
+/// itself) rather than any single event: `service.name`, `service.version`,
+/// `service.instance.id`, and so on.  They are emitted under a `resource`
+/// object by the `OtlpJson` format and are otherwise unused.
+///
+/// Typically called once at application start.
+///
+/// ```gleam
+/// woof.set_resource([
+///   woof.str("service.name", "checkout"),
+///   woof.str("service.version", "1.8.0"),
+/// ])
+/// ```
+pub fn set_resource(attrs: List(#(String, FieldValue))) -> Nil {
+  let state = read_state()
+  write_state(State(..state, resource: attrs))
+}
+
+/// Get the current OpenTelemetry resource attributes.
+pub fn get_resource() -> List(#(String, FieldValue)) {
+  let state = read_state()
+  state.resource
 }
 
 // ---------------------------------------------------------------------------
@@ -1037,6 +1137,17 @@ pub fn format_event_compact(event: LogEvent) -> String {
   format_compact(entry)
 }
 
+/// Format a `LogEvent` as a single OpenTelemetry-shaped JSON object.
+///
+/// The output carries `timestamp_unix_nano`, `severity_number`,
+/// `severity_text`, `body`, and `attributes`.  When the event has `trace_id`
+/// or `span_id` fields they are promoted to top-level keys rather than left
+/// in `attributes`.  The current resource (see `set_resource`) is emitted
+/// under `resource` when it is non-empty.
+pub fn format_event_otlp(event: LogEvent) -> String {
+  format_log_event_otlp(event, get_resource())
+}
+
 fn log_event_to_entry(event: LogEvent) -> Entry {
   Entry(
     level: event.level,
@@ -1075,6 +1186,105 @@ fn format_log_event_json(event: LogEvent) -> String {
   "{" <> string.join(list.append(core, user_fields), ",") <> "}"
 }
 
+// ---------------------------------------------------------------------------
+// OpenTelemetry OTLP serialisation (v1.8)
+// ---------------------------------------------------------------------------
+
+/// Map a `Level` to its OpenTelemetry severity number (the 1..24 scale).
+/// woof's eight levels land on the OTel range as follows:
+/// Debug 5, Info 9, Notice 10, Warning 13, Error 17, Critical 18,
+/// Alert 21, Emergency 24.
+fn severity_number(level: Level) -> Int {
+  case level {
+    Debug -> 5
+    Info -> 9
+    Notice -> 10
+    Warning -> 13
+    Error -> 17
+    Critical -> 18
+    Alert -> 21
+    Emergency -> 24
+  }
+}
+
+/// Map a `Level` to its OpenTelemetry severity text.
+fn severity_text(level: Level) -> String {
+  case level {
+    Debug -> "DEBUG"
+    Info -> "INFO"
+    Notice -> "INFO2"
+    Warning -> "WARN"
+    Error -> "ERROR"
+    Critical -> "ERROR2"
+    Alert -> "FATAL"
+    Emergency -> "FATAL4"
+  }
+}
+
+fn format_log_event_otlp(
+  event: LogEvent,
+  resource: List(#(String, FieldValue)),
+) -> String {
+  let head = [
+    "\"timestamp_unix_nano\":" <> ffi_iso_to_unix_nano(event.timestamp),
+    "\"severity_number\":" <> gleam_int.to_string(severity_number(event.level)),
+    json_pair("severity_text", severity_text(event.level)),
+    json_pair("body", event.message),
+  ]
+
+  let trace = case otlp_trace_field(event.fields, "trace_id") {
+    Some(value) -> [json_pair("trace_id", value)]
+    None -> []
+  }
+  let span = case otlp_trace_field(event.fields, "span_id") {
+    Some(value) -> [json_pair("span_id", value)]
+    None -> []
+  }
+
+  let resource_part = case resource {
+    [] -> []
+    attrs -> ["\"resource\":" <> json_object_typed(attrs)]
+  }
+
+  // trace_id / span_id are promoted to top-level keys, so they are dropped
+  // from attributes.  The logger namespace, which has no dedicated OTLP
+  // field, is carried as an attribute so it is not lost.
+  let event_attributes =
+    list.filter(event.fields, fn(f) { !is_trace_key(f.0) })
+  let attributes = case event.namespace {
+    Some(ns) -> [#("namespace", FString(ns)), ..event_attributes]
+    None -> event_attributes
+  }
+  let attributes_part = ["\"attributes\":" <> json_object_typed(attributes)]
+
+  let parts = list.flatten([head, trace, span, resource_part, attributes_part])
+  "{" <> string.join(parts, ",") <> "}"
+}
+
+/// Read a trace field (`trace_id` / `span_id`) from a field list, if it is
+/// present and holds a string value.
+fn otlp_trace_field(
+  fields: List(#(String, FieldValue)),
+  key: String,
+) -> Option(String) {
+  case list.key_find(fields, key) {
+    Ok(FString(value)) -> Some(value)
+    _ -> None
+  }
+}
+
+fn is_trace_key(key: String) -> Bool {
+  key == "trace_id" || key == "span_id"
+}
+
+fn json_object_typed(pairs: List(#(String, FieldValue))) -> String {
+  let body =
+    pairs
+    |> list.map(fn(p) { json_pair_typed(p.0, p.1) })
+    |> string.join(",")
+  "{" <> body <> "}"
+}
+
 /// Return the lowercase name of a level.
 ///
 /// Useful inside `Custom` formatters.
@@ -1101,6 +1311,7 @@ type State {
     format: Format,
     colors: ColorMode,
     global_context: List(#(String, FieldValue)),
+    resource: List(#(String, FieldValue)),
     sinks: List(Sink),
     event_sink: Option(EventSink),
   )
@@ -1112,6 +1323,7 @@ fn default_state() -> State {
     format: Text,
     colors: Auto,
     global_context: [],
+    resource: [],
     sinks: [default_sink],
     event_sink: None,
   )
@@ -1170,11 +1382,12 @@ fn do_log(
   message: String,
   fields: List(#(String, FieldValue)),
   namespace: Option(String),
+  trace: Option(#(String, String)),
 ) -> Nil {
   let state = read_state()
   case should_log(level, state.level) {
     False -> Nil
-    True -> do_emit(state, level, message, fields, namespace)
+    True -> do_emit(state, level, message, fields, namespace, trace)
   }
 }
 
@@ -1183,11 +1396,12 @@ fn emit_lazy(
   build: fn() -> String,
   fields: List(#(String, FieldValue)),
   namespace: Option(String),
+  trace: Option(#(String, String)),
 ) -> Nil {
   let state = read_state()
   case should_log(level, state.level) {
     False -> Nil
-    True -> do_emit(state, level, build(), fields, namespace)
+    True -> do_emit(state, level, build(), fields, namespace, trace)
   }
 }
 
@@ -1197,53 +1411,53 @@ fn do_emit(
   message: String,
   fields: List(#(String, FieldValue)),
   namespace: Option(String),
+  logger_trace: Option(#(String, String)),
 ) -> Nil {
   let ctx = ffi_get_context([])
-  let all_fields = list.flatten([state.global_context, ctx, fields])
+  let merged = list.flatten([state.global_context, ctx, fields])
+  // A logger trace (set_trace) takes precedence over a scoped trace
+  // (with_trace).  When either is present, trace_id and span_id are
+  // prepended so every formatter and sink sees them.
+  let all_fields = case option.or(logger_trace, ffi_get_trace(None)) {
+    Some(#(trace_id, span_id)) -> [
+      #("trace_id", FString(trace_id)),
+      #("span_id", FString(span_id)),
+      ..merged
+    ]
+    None -> merged
+  }
   let timestamp = ffi_now()
 
-  // ── Legacy sink path - serialise FieldValue → String ──────────────────
-  let string_fields = fields_to_strings(all_fields)
   let entry =
     Entry(
       level: level,
       message: message,
-      fields: string_fields,
+      fields: fields_to_strings(all_fields),
       namespace: namespace,
       timestamp: timestamp,
     )
-  // Json format uses native typed serialisation (v1.7); Text/Compact/Custom
-  // continue to receive the stringified Entry.
+  let log_event =
+    LogEvent(
+      level: level,
+      message: message,
+      fields: all_fields,
+      timestamp: timestamp,
+      namespace: namespace,
+    )
+  // Json and OtlpJson use native typed serialisation (v1.7 / v1.8);
+  // Text / Compact / Custom receive the stringified Entry.
   let formatted = case state.format {
-    Json -> {
-      let log_event =
-        LogEvent(
-          level: level,
-          message: message,
-          fields: all_fields,
-          timestamp: timestamp,
-          namespace: namespace,
-        )
-      format_log_event_json(log_event)
-    }
+    Json -> format_log_event_json(log_event)
+    OtlpJson -> format_log_event_otlp(log_event, state.resource)
     _ -> format_entry(entry, state.format, state.colors)
   }
-  list.each(state.sinks, fn(sink) { sink(entry, formatted) })
+  list.each(state.sinks, fn(sink) {
+    ffi_safe_call(fn() { sink(entry, formatted) })
+  })
 
-  // ── Typed event sink path - preserve FieldValue ───────────────────────
   case state.event_sink {
     None -> Nil
-    Some(event_sink_fn) -> {
-      let log_event =
-        LogEvent(
-          level: level,
-          message: message,
-          fields: all_fields,
-          timestamp: timestamp,
-          namespace: namespace,
-        )
-      event_sink_fn(log_event)
-    }
+    Some(event_sink_fn) -> ffi_safe_call(fn() { event_sink_fn(log_event) })
   }
 }
 
@@ -1290,8 +1504,22 @@ fn format_entry(
     Text -> format_text(entry, resolve_colors(colors))
     Json -> format_json(entry)
     Compact -> format_compact(entry)
+    OtlpJson -> format_log_event_otlp(entry_to_log_event(entry), get_resource())
     Custom(f) -> f(entry)
   }
+}
+
+/// Lift an `Entry` (string fields) back into a `LogEvent` so the typed
+/// formatters can run on it.  Field values become `FString`, so the typed
+/// path keeps full fidelity only when fed a real `LogEvent`.
+fn entry_to_log_event(entry: Entry) -> LogEvent {
+  LogEvent(
+    level: entry.level,
+    message: entry.message,
+    fields: list.map(entry.fields, fn(p) { #(p.0, FString(p.1)) }),
+    timestamp: entry.timestamp,
+    namespace: entry.namespace,
+  )
 }
 
 fn resolve_colors(mode: ColorMode) -> Bool {
@@ -1314,6 +1542,12 @@ fn no_color_set() -> Bool {
   result.is_ok(ffi_get_env("NO_COLOR"))
 }
 
+/// Strip ESC bytes from user-controlled strings in Text output to prevent
+/// terminal ANSI injection.  Json format is safe via json_escape.
+fn strip_ansi(s: String) -> String {
+  string.replace(s, "\u{001B}", "")
+}
+
 /// Text format example:
 ///   [INFO] 10:30:45 Server started
 ///     port: 3000
@@ -1325,11 +1559,12 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
   let time = short_time(entry.timestamp)
   let ns = case entry.namespace {
     None -> ""
-    Some(n) -> n <> ": "
+    Some(n) -> strip_ansi(n) <> ": "
   }
+  let message = strip_ansi(entry.message)
 
   let header = case use_colors {
-    False -> "[" <> tag <> "] " <> time <> " " <> ns <> entry.message
+    False -> "[" <> tag <> "] " <> time <> " " <> ns <> message
     True -> {
       let color = level_color(entry.level)
       color
@@ -1343,7 +1578,7 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
       <> ansi_reset
       <> " "
       <> ns
-      <> entry.message
+      <> message
     }
   }
 
@@ -1353,7 +1588,7 @@ fn format_text(entry: Entry, use_colors: Bool) -> String {
       let field_lines =
         list.map(fields, fn(pair) {
           let #(k, v) = pair
-          "  " <> k <> ": " <> v
+          "  " <> strip_ansi(k) <> ": " <> strip_ansi(v)
         })
         |> string.join("\n")
       header <> "\n" <> field_lines
@@ -1455,7 +1690,18 @@ fn field_value_to_json(fv: FieldValue) -> String {
   case fv {
     FString(s) -> "\"" <> json_escape(s) <> "\""
     FInt(n) -> gleam_int.to_string(n)
-    FFloat(f) -> gleam_float.to_string(f)
+    FFloat(f) -> {
+      let s = gleam_float.to_string(f)
+      let lower = string.lowercase(s)
+      let non_finite =
+        string.starts_with(lower, "nan")
+        || string.starts_with(lower, "inf")
+        || string.starts_with(lower, "-inf")
+      case non_finite {
+        True -> "null"
+        False -> s
+      }
+    }
     FBool(True) -> "true"
     FBool(False) -> "false"
     FNull -> "null"
@@ -1608,3 +1854,21 @@ fn ffi_beam_event_log(
   fields: List(#(String, FieldValue)),
   namespace: Option(String),
 ) -> Nil
+
+@external(erlang, "woof_ffi", "safe_call_fn")
+@external(javascript, "./woof_ffi.mjs", "safe_call_fn")
+fn ffi_safe_call(f: fn() -> Nil) -> Nil
+
+@external(erlang, "woof_ffi", "get_trace")
+@external(javascript, "./woof_ffi.mjs", "get_trace")
+fn ffi_get_trace(
+  default: Option(#(String, String)),
+) -> Option(#(String, String))
+
+@external(erlang, "woof_ffi", "set_trace")
+@external(javascript, "./woof_ffi.mjs", "set_trace")
+fn ffi_set_trace(trace: Option(#(String, String))) -> Nil
+
+@external(erlang, "woof_ffi", "iso_to_unix_nano")
+@external(javascript, "./woof_ffi.mjs", "iso_to_unix_nano")
+fn ffi_iso_to_unix_nano(iso: String) -> String
