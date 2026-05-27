@@ -1249,8 +1249,7 @@ fn format_log_event_otlp(
   // trace_id / span_id are promoted to top-level keys, so they are dropped
   // from attributes.  The logger namespace, which has no dedicated OTLP
   // field, is carried as an attribute so it is not lost.
-  let event_attributes =
-    list.filter(event.fields, fn(f) { !is_trace_key(f.0) })
+  let event_attributes = list.filter(event.fields, fn(f) { !is_trace_key(f.0) })
   let attributes = case event.namespace {
     Some(ns) -> [#("namespace", FString(ns)), ..event_attributes]
     None -> event_attributes
