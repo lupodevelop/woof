@@ -56,6 +56,10 @@ infrastructure.
 
 * Composable sink wrappers (operate on `EventSink`):
   * `sample_event_sink(rate, always_keep_above, sink)` probabilistic sampling
+  * `consistent_sample_event_sink(rate, key_field, always_keep_above, sink)`
+    trace-coherent sampling: deterministic by hashing `key_field`
+    (FNV-1a, denominator 10_000), so every log line tied to a trace
+    stays together as a group
   * `rate_limit_event_sink(per_second, sink)` token-bucket flood protection
   * `redact_event_sink(keys, sink)` PII / secret masking, recursive
   * `limit_fields_event_sink(max_fields, sink)` cardinality cap
@@ -128,6 +132,13 @@ Considered and intentionally excluded:
 * **Cardinality sanitiser as a hard runtime constraint.** Documentation
   plus `limit_fields_event_sink` (v1.9) cover this without policing user
   code.
+* **Sharded fan-out (`shard_event_sink`) and full consistent-hashing
+  ring with virtual nodes.** v1.9 ships `consistent_sample_event_sink`
+  for trace-coherent sampling, which is the strong, demanded use case.
+  Multi-sink fan-out by hashed key is niche, has weaker semantics under
+  resize (plain mod-N is not consistent hashing), and pins API surface
+  in the last 1.x release. Reconsider as a v1.9.x patch or a separate
+  plugin package once there is concrete demand.
 
 ## Release criteria
 

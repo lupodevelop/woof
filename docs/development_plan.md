@@ -603,6 +603,30 @@ pub fn sample_event_sink(
   sink: EventSink,
 ) -> EventSink
 
+/// Deterministic, trace-coherent sampling.  Same `key_field` value always
+/// produces the same keep/drop decision, so every log line tied to a trace
+/// stays together (kept or dropped as a group).
+///
+/// Algorithm:
+///   - look up `key_field` on the event; if missing or non-scalar, fall
+///     back to probabilistic per-event sampling for that event
+///   - hash the key with FNV-1a 32-bit (pure Gleam, identical on BEAM and JS)
+///   - keep if `hash mod 10_000 < rate * 10_000`
+///
+/// 10_000 is the pinned denominator: 0.01% granularity, locked across
+/// versions so a sampling decision for a given trace is stable forever.
+///
+/// `rate` is clamped to [0.0, 1.0].  `always_keep_above` bypasses sampling
+/// for high-severity events, same semantics as `sample_event_sink`.
+///
+/// Standard OpenTelemetry pattern (consistent_probability_sampler).
+pub fn consistent_sample_event_sink(
+  rate: Float,
+  key_field: String,
+  always_keep_above: Level,
+  sink: EventSink,
+) -> EventSink
+
 /// Token-bucket rate limit.  At most `per_second` events forwarded.
 pub fn rate_limit_event_sink(
   per_second: Int,
@@ -701,6 +725,9 @@ Output: throughput (events/sec) + per-event latency (ns).  Published as
 ### Deliverables
 
 - [ ] `sample_event_sink` (with seedable RNG for deterministic tests)
+- [ ] `consistent_sample_event_sink` (FNV-1a 32-bit, denominator 10_000,
+      fallback to probabilistic on missing key, tests for cross-target
+      hash equivalence and trace coherence)
 - [ ] `rate_limit_event_sink` (token-bucket, per-process state)
 - [ ] `redact_event_sink` (recursive into FMap/FList)
 - [ ] `limit_fields_event_sink`
