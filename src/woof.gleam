@@ -1,3 +1,5 @@
+import gleam/bit_array
+import gleam/dict.{type Dict}
 import gleam/float as gleam_float
 import gleam/int as gleam_int
 import gleam/io
@@ -316,6 +318,213 @@ pub fn filter_event_sink(
   }
 }
 
+/// Wrap an `EventSink` so fields whose key is in `keys` are masked before
+/// reaching it - PII / secret redaction.
+///
+/// Matching is by exact key name, recursively: a key inside a nested
+/// `FMap` (built with `woof.map`) is masked too. The matched value is
+/// replaced with `FString("[REDACTED]")` regardless of its original type.
+///
+/// ```gleam
+/// woof.set_event_sink(woof.redact_event_sink(["password", "token"], sink))
+/// ```
+pub fn redact_event_sink(keys: List(String), sink: EventSink) -> EventSink {
+  fn(event: LogEvent) -> Nil {
+    sink(LogEvent(..event, fields: redact_fields(keys, event.fields)))
+  }
+}
+
+/// Wrap an `EventSink` with trace-coherent probabilistic sampling.
+///
+/// Unlike `sample_event_sink`, the keep/drop decision is deterministic:
+/// it hashes the value of `key_field` (FNV-1a) instead of rolling
+/// randomness, so every event sharing the same key - e.g. all log lines
+/// tied to one `trace_id` - is kept or dropped together as a group.
+/// Events at or above `always_keep_above` always pass. Events missing
+/// `key_field` always pass too: a misconfigured key should not silently
+/// drop logs it can't correlate.
+///
+/// ```gleam
+/// woof.set_event_sink(woof.consistent_sample_event_sink(
+///   0.1, "trace_id", woof.Error, sink,
+/// ))
+/// ```
+pub fn consistent_sample_event_sink(
+  rate: Float,
+  key_field: String,
+  always_keep_above: Level,
+  sink: EventSink,
+) -> EventSink {
+  fn(event: LogEvent) -> Nil {
+    case level_to_int(event.level) >= level_to_int(always_keep_above) {
+      True -> sink(event)
+      False ->
+        case list.key_find(event.fields, key_field) {
+          Ok(value) -> {
+            let bucket = fnv1a(field_value_to_string(value)) |> int_mod(10_000)
+            let threshold = gleam_float.round(rate *. 10_000.0)
+            case bucket < threshold {
+              True -> sink(event)
+              False -> Nil
+            }
+          }
+          _ -> sink(event)
+        }
+    }
+  }
+}
+
+/// Wrap an `EventSink` with probabilistic sampling.
+///
+/// Each event below `always_keep_above` is kept with probability `rate`
+/// (`0.0` drops everything, `1.0` keeps everything). The decision is a
+/// fresh coin flip per event - for sampling that must stay coherent across
+/// every log line of the same trace, use `consistent_sample_event_sink`
+/// instead. Events at or above `always_keep_above` always pass.
+///
+/// ```gleam
+/// woof.set_event_sink(woof.sample_event_sink(0.1, woof.Error, sink))
+/// ```
+pub fn sample_event_sink(
+  rate: Float,
+  always_keep_above: Level,
+  sink: EventSink,
+) -> EventSink {
+  fn(event: LogEvent) -> Nil {
+    case level_to_int(event.level) >= level_to_int(always_keep_above) {
+      True -> sink(event)
+      False ->
+        case ffi_random_float() <. rate {
+          True -> sink(event)
+          False -> Nil
+        }
+    }
+  }
+}
+
+/// Wrap an `EventSink` with a token-bucket rate limit of `per_second`
+/// events. The bucket starts full, so a burst of up to `per_second` events
+/// always passes; tokens then refill continuously based on elapsed
+/// monotonic time. Events beyond the bucket are dropped, protecting
+/// whatever the wrapped sink talks to (network, disk, a billed API) from a
+/// sudden flood.
+///
+/// Each call to `rate_limit_event_sink` creates its own independent bucket.
+///
+/// ```gleam
+/// woof.set_event_sink(woof.rate_limit_event_sink(1000, sink))
+/// ```
+pub fn rate_limit_event_sink(per_second: Int, sink: EventSink) -> EventSink {
+  let capacity = gleam_int.to_float(per_second)
+  let bucket = ffi_box_new(#(capacity, ffi_monotonic_now()))
+  fn(event: LogEvent) -> Nil {
+    let #(tokens, last_refill) = ffi_box_get(bucket)
+    let now = ffi_monotonic_now()
+    let elapsed_ms = gleam_int.to_float(now - last_refill)
+    let refilled = tokens +. elapsed_ms *. capacity /. 1000.0
+    let available = case refilled >. capacity {
+      True -> capacity
+      False -> refilled
+    }
+    case available >=. 1.0 {
+      True -> {
+        ffi_box_set(bucket, #(available -. 1.0, now))
+        sink(event)
+      }
+      False -> {
+        ffi_box_set(bucket, #(available, now))
+        Nil
+      }
+    }
+  }
+}
+
+/// Wrap a batch sink so events are delivered in groups instead of one at a
+/// time - turns N calls into roughly N / `max_size` calls, which matters
+/// when the wrapped sink pays a fixed cost per call (an HTTP request to a
+/// log backend, for instance).
+///
+/// `sink` receives the accumulated events, not one at a time - it takes
+/// `fn(List(LogEvent)) -> Nil`, not an `EventSink`. A batch is flushed as
+/// soon as it reaches `max_size` events, or as soon as `max_interval_ms`
+/// have elapsed since the batch started, whichever comes first.
+///
+/// This wrapper never runs a background timer: a partial batch only
+/// flushes when the next event arrives and one of the two conditions is
+/// checked again. If traffic stops, the last partial batch stays buffered
+/// until the next event or process exit. Acceptable for a synchronous
+/// wrapper; call the returned sink periodically yourself (e.g. from a
+/// scheduled health-check log) if you need a hard upper bound on delivery
+/// latency during idle periods.
+///
+/// ```gleam
+/// woof.set_event_sink(woof.batch_event_sink(100, 5000, fn(events) {
+///   send_to_log_backend(events)
+/// }))
+/// ```
+pub fn batch_event_sink(
+  max_size: Int,
+  max_interval_ms: Int,
+  sink: fn(List(LogEvent)) -> Nil,
+) -> EventSink {
+  let buffer = ffi_box_new(#([], ffi_monotonic_now()))
+  fn(event: LogEvent) -> Nil {
+    let #(pending, batch_start) = ffi_box_get(buffer)
+    let updated = [event, ..pending]
+    let now = ffi_monotonic_now()
+    let due =
+      list.length(updated) >= max_size || now - batch_start >= max_interval_ms
+    case due {
+      True -> {
+        ffi_box_set(buffer, #([], now))
+        sink(list.reverse(updated))
+      }
+      False -> ffi_box_set(buffer, #(updated, batch_start))
+    }
+  }
+}
+
+fn fnv1a(s: String) -> Int {
+  fnv1a_loop(bit_array.from_string(s), 2_166_136_261)
+}
+
+fn fnv1a_loop(bits: BitArray, hash: Int) -> Int {
+  case bits {
+    <<byte, rest:bytes>> -> {
+      let h = gleam_int.bitwise_exclusive_or(hash, byte)
+      let h = gleam_int.bitwise_and(h * 16_777_619, 0xFFFFFFFF)
+      fnv1a_loop(rest, h)
+    }
+    <<>> -> hash
+    _ -> hash
+  }
+}
+
+fn int_mod(n: Int, m: Int) -> Int {
+  let r = n % m
+  case r < 0 {
+    True -> r + m
+    False -> r
+  }
+}
+
+fn redact_fields(
+  keys: List(String),
+  fields: List(#(String, FieldValue)),
+) -> List(#(String, FieldValue)) {
+  list.map(fields, fn(pair) {
+    let #(k, v) = pair
+    case list.contains(keys, k) {
+      True -> #(k, FString("[REDACTED]"))
+      False ->
+        case v {
+          FMap(pairs) -> #(k, FMap(redact_fields(keys, pairs)))
+          _ -> #(k, v)
+        }
+    }
+  })
+}
+
 /// Dispatch a pre-built `LogEvent` through every registered sink.
 ///
 /// Unlike the level-tagged shortcuts (`info`, `error`, ...), `emit` does not
@@ -498,6 +707,56 @@ pub fn warning(message: String, fields: List(#(String, FieldValue))) -> Nil {
 /// Log at Error level.
 pub fn error(message: String, fields: List(#(String, FieldValue))) -> Nil {
   do_log(Error, message, fields, None, None)
+}
+
+/// Log at Error level with a structured error field, aligned with the
+/// OpenTelemetry `error.*` semantic convention.
+///
+/// `err` becomes the `error.message` field, prepended to `fields` - use
+/// this instead of `error()` when there is a specific failure reason to
+/// carry as its own field rather than folding into the message string.
+///
+/// ```gleam
+/// woof.error_with("payment failed", "timeout", [woof.str("order_id", "O1")])
+/// ```
+pub fn error_with(
+  message: String,
+  err: String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  error(message, [#("error.message", FString(err)), ..fields])
+}
+
+/// Log at `level`, but only for the first `n` calls sharing the same `key`
+/// across the process - every call after that is a silent no-op. Use it to
+/// stop a failing loop or retry path from flooding the logs while still
+/// seeing the first few occurrences.
+///
+/// There is no time window and no reset: this is a hard cap on the whole
+/// process lifetime, tracked by a counter per `key` that is never cleared.
+/// Use a fixed key from the call site (e.g. a literal string naming the
+/// call site) - a key derived from user input grows the counter map
+/// without bound.
+///
+/// ```gleam
+/// woof.log_at_most(5, "db_retry_failed", woof.Warning, "retry failed", [])
+/// ```
+pub fn log_at_most(
+  n: Int,
+  key: String,
+  level: Level,
+  message: String,
+  fields: List(#(String, FieldValue)),
+) -> Nil {
+  let counts = ffi_get_log_at_most(dict.new())
+  let count = dict.get(counts, key) |> result.unwrap(0)
+  case count < n {
+    True -> {
+      ffi_set_log_at_most(dict.insert(counts, key, count + 1))
+      do_log(level, message, fields, None, None)
+    }
+    False -> Nil
+  }
 }
 
 /// Log at Notice level.  Use for significant business events that are not
@@ -1304,6 +1563,12 @@ pub fn level_name(level: Level) -> String {
 // Internals - state
 // ---------------------------------------------------------------------------
 
+/// An opaque mutable cell, backed by the target runtime (ETS on Erlang,
+/// a plain object on JavaScript). Gleam values are otherwise immutable, so
+/// stateful sink wrappers (rate_limit_event_sink, batch_event_sink,
+/// log_at_most) use this to hold per-instance state across calls.
+type Box(a)
+
 type State {
   State(
     level: Level,
@@ -1871,3 +2136,27 @@ fn ffi_set_trace(trace: Option(#(String, String))) -> Nil
 @external(erlang, "woof_ffi", "iso_to_unix_nano")
 @external(javascript, "./woof_ffi.mjs", "iso_to_unix_nano")
 fn ffi_iso_to_unix_nano(iso: String) -> String
+
+@external(erlang, "woof_ffi", "box_new")
+@external(javascript, "./woof_ffi.mjs", "box_new")
+fn ffi_box_new(initial: a) -> Box(a)
+
+@external(erlang, "woof_ffi", "box_get")
+@external(javascript, "./woof_ffi.mjs", "box_get")
+fn ffi_box_get(box: Box(a)) -> a
+
+@external(erlang, "woof_ffi", "box_set")
+@external(javascript, "./woof_ffi.mjs", "box_set")
+fn ffi_box_set(box: Box(a), value: a) -> Nil
+
+@external(erlang, "woof_ffi", "random_float")
+@external(javascript, "./woof_ffi.mjs", "random_float")
+fn ffi_random_float() -> Float
+
+@external(erlang, "woof_ffi", "get_log_at_most")
+@external(javascript, "./woof_ffi.mjs", "get_log_at_most")
+fn ffi_get_log_at_most(default: Dict(String, Int)) -> Dict(String, Int)
+
+@external(erlang, "woof_ffi", "set_log_at_most")
+@external(javascript, "./woof_ffi.mjs", "set_log_at_most")
+fn ffi_set_log_at_most(counts: Dict(String, Int)) -> Nil

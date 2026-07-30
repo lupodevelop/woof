@@ -3200,3 +3200,429 @@ pub fn format_with_otlpjson_on_entry_path_test() {
   out |> string.contains("\"body\":\"boom\"") |> should.be_true
   out |> string.contains("\"attributes\":{\"code\":\"500\"}") |> should.be_true
 }
+
+// ---------------------------------------------------------------------------
+// v1.9 - redact_event_sink
+// ---------------------------------------------------------------------------
+
+pub fn redact_event_sink_masks_matching_top_level_key_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let redacted = woof.redact_event_sink(["password"], sink)
+  woof.set_event_sink(redacted)
+
+  woof.info("login", [woof.str("password", "hunter2"), woof.str("user", "ada")])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("password", woof.FString("[REDACTED]")),
+    #("user", woof.FString("ada")),
+  ])
+  reset()
+}
+
+pub fn redact_event_sink_masks_key_inside_nested_map_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let redacted = woof.redact_event_sink(["token"], sink)
+  woof.set_event_sink(redacted)
+
+  woof.info("call", [
+    woof.map("auth", [
+      #("token", woof.vstr("secret")),
+      #("scope", woof.vstr("read")),
+    ]),
+  ])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #(
+      "auth",
+      woof.FMap([
+        #("token", woof.FString("[REDACTED]")),
+        #("scope", woof.FString("read")),
+      ]),
+    ),
+  ])
+  reset()
+}
+
+pub fn redact_event_sink_passthrough_when_key_absent_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let redacted = woof.redact_event_sink(["password"], sink)
+  woof.set_event_sink(redacted)
+
+  woof.info("login", [woof.str("user", "ada")])
+
+  let assert [event] = get()
+  event.fields |> should.equal([#("user", woof.FString("ada"))])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - consistent_sample_event_sink
+// ---------------------------------------------------------------------------
+
+pub fn consistent_sample_event_sink_rate_1_keeps_everything_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let sampled =
+    woof.consistent_sample_event_sink(1.0, "trace_id", woof.Error, sink)
+  woof.set_event_sink(sampled)
+
+  woof.info("a", [woof.str("trace_id", "t1")])
+  woof.info("b", [woof.str("trace_id", "t2")])
+  woof.info("c", [woof.str("trace_id", "t3")])
+
+  get() |> list.length |> should.equal(3)
+  reset()
+}
+
+pub fn consistent_sample_event_sink_rate_0_drops_everything_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let sampled =
+    woof.consistent_sample_event_sink(0.0, "trace_id", woof.Error, sink)
+  woof.set_event_sink(sampled)
+
+  woof.info("a", [woof.str("trace_id", "t1")])
+  woof.info("b", [woof.str("trace_id", "t2")])
+
+  get() |> list.length |> should.equal(0)
+  reset()
+}
+
+pub fn consistent_sample_event_sink_same_key_is_consistent_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let sampled =
+    woof.consistent_sample_event_sink(0.5, "trace_id", woof.Error, sink)
+  woof.set_event_sink(sampled)
+
+  // Same trace_id, different messages: either all kept or all dropped.
+  woof.info("a", [woof.str("trace_id", "same-trace")])
+  woof.info("b", [woof.str("trace_id", "same-trace")])
+  woof.info("c", [woof.str("trace_id", "same-trace")])
+
+  let count = get() |> list.length
+  { count == 0 || count == 3 } |> should.be_true
+  reset()
+}
+
+pub fn consistent_sample_event_sink_always_keep_above_bypasses_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let sampled =
+    woof.consistent_sample_event_sink(0.0, "trace_id", woof.Error, sink)
+  woof.set_event_sink(sampled)
+
+  woof.error("boom", [woof.str("trace_id", "t1")])
+
+  get() |> list.length |> should.equal(1)
+  reset()
+}
+
+pub fn consistent_sample_event_sink_missing_key_passes_through_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let sampled =
+    woof.consistent_sample_event_sink(0.0, "trace_id", woof.Error, sink)
+  woof.set_event_sink(sampled)
+
+  woof.info("no trace field", [])
+
+  get() |> list.length |> should.equal(1)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - sample_event_sink
+// ---------------------------------------------------------------------------
+
+pub fn sample_event_sink_rate_1_keeps_everything_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(woof.sample_event_sink(1.0, woof.Error, sink))
+
+  woof.info("a", [])
+  woof.info("b", [])
+  woof.info("c", [])
+
+  get() |> list.length |> should.equal(3)
+  reset()
+}
+
+pub fn sample_event_sink_rate_0_drops_everything_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(woof.sample_event_sink(0.0, woof.Error, sink))
+
+  woof.info("a", [])
+  woof.info("b", [])
+
+  get() |> list.length |> should.equal(0)
+  reset()
+}
+
+pub fn sample_event_sink_always_keep_above_bypasses_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(woof.sample_event_sink(0.0, woof.Error, sink))
+
+  woof.error("boom", [])
+  woof.critical("worse", [])
+
+  get() |> list.length |> should.equal(2)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - rate_limit_event_sink
+// ---------------------------------------------------------------------------
+
+pub fn rate_limit_event_sink_allows_up_to_the_bucket_size_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(woof.rate_limit_event_sink(3, sink))
+
+  woof.info("a", [])
+  woof.info("b", [])
+  woof.info("c", [])
+
+  get() |> list.length |> should.equal(3)
+  reset()
+}
+
+pub fn rate_limit_event_sink_drops_beyond_the_bucket_size_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(woof.rate_limit_event_sink(2, sink))
+
+  woof.info("a", [])
+  woof.info("b", [])
+  woof.info("c", [])
+  woof.info("d", [])
+
+  get() |> list.length |> should.equal(2)
+  reset()
+}
+
+pub fn rate_limit_event_sink_instances_are_independent_test() {
+  reset()
+  // Two separately-constructed wrappers must not share bucket state:
+  // exhausting the first must not affect the second.
+  let #(sink_a, get_a) = woof.test_sink()
+  woof.set_event_sink(woof.rate_limit_event_sink(1, sink_a))
+  woof.info("a1", [])
+  woof.info("a2", [])
+  get_a() |> list.length |> should.equal(1)
+
+  let #(sink_b, get_b) = woof.test_sink()
+  woof.set_event_sink(woof.rate_limit_event_sink(1, sink_b))
+  woof.info("b1", [])
+  get_b() |> list.length |> should.equal(1)
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - batch_event_sink
+// ---------------------------------------------------------------------------
+//
+// batch_event_sink wraps a *batch* sink (fn(List(LogEvent)) -> Nil), not a
+// per-event EventSink - that is the whole point, one call per flush instead
+// of one per event. To observe flushes without new test infrastructure, the
+// batch sink below encodes each flush as a single marker LogEvent (message
+// carries the batch size) pushed through the existing test_sink() capture.
+
+fn batch_marker_sink(
+  marker_sink: woof.EventSink,
+) -> fn(List(woof.LogEvent)) -> Nil {
+  fn(batch: List(woof.LogEvent)) -> Nil {
+    marker_sink(woof.LogEvent(
+      woof.Info,
+      "batch:" <> int.to_string(list.length(batch)),
+      [],
+      "t",
+      None,
+    ))
+  }
+}
+
+pub fn batch_event_sink_does_not_flush_before_thresholds_test() {
+  reset()
+  let #(marker_sink, get_markers) = woof.test_sink()
+  let batched = woof.batch_event_sink(5, 60_000, batch_marker_sink(marker_sink))
+  woof.set_event_sink(batched)
+
+  woof.info("a", [])
+
+  get_markers() |> list.length |> should.equal(0)
+  reset()
+}
+
+pub fn batch_event_sink_flushes_when_max_size_reached_test() {
+  reset()
+  let #(marker_sink, get_markers) = woof.test_sink()
+  let batched = woof.batch_event_sink(2, 60_000, batch_marker_sink(marker_sink))
+  woof.set_event_sink(batched)
+
+  woof.info("a", [])
+  woof.info("b", [])
+
+  let assert [marker] = get_markers()
+  marker.message |> should.equal("batch:2")
+  reset()
+}
+
+pub fn batch_event_sink_keeps_partial_batch_after_flush_test() {
+  reset()
+  let #(marker_sink, get_markers) = woof.test_sink()
+  let batched = woof.batch_event_sink(2, 60_000, batch_marker_sink(marker_sink))
+  woof.set_event_sink(batched)
+
+  woof.info("a", [])
+  woof.info("b", [])
+  woof.info("c", [])
+
+  // Only the full first batch has flushed; "c" is still buffered.
+  get_markers() |> list.length |> should.equal(1)
+  reset()
+}
+
+pub fn batch_event_sink_flushes_when_interval_elapsed_test() {
+  reset()
+  let #(marker_sink, get_markers) = woof.test_sink()
+  // max_interval_ms: 0 - any elapsed time flushes, so even a lone first
+  // event triggers a flush deterministically (no real sleep needed).
+  let batched = woof.batch_event_sink(100, 0, batch_marker_sink(marker_sink))
+  woof.set_event_sink(batched)
+
+  woof.info("a", [])
+
+  let assert [marker] = get_markers()
+  marker.message |> should.equal("batch:1")
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - error_with
+// ---------------------------------------------------------------------------
+
+pub fn error_with_logs_at_error_level_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.error_with("payment failed", "timeout", [woof.str("order_id", "O1")])
+
+  let assert [event] = get()
+  event.level |> should.equal(woof.Error)
+  event.message |> should.equal("payment failed")
+  reset()
+}
+
+pub fn error_with_prepends_error_message_field_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.error_with("payment failed", "timeout", [woof.str("order_id", "O1")])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("error.message", woof.FString("timeout")),
+    #("order_id", woof.FString("O1")),
+  ])
+  reset()
+}
+
+// ---------------------------------------------------------------------------
+// v1.9 - log_at_most
+// ---------------------------------------------------------------------------
+//
+// log_at_most keeps a process-wide counter per key (no reset API by
+// design) - tests use a key unique to each test function to stay isolated
+// from one another within the same test run.
+
+pub fn log_at_most_logs_up_to_n_times_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.log_at_most(
+    2,
+    "log_at_most_logs_up_to_n_times",
+    woof.Warning,
+    "spam",
+    [],
+  )
+  woof.log_at_most(
+    2,
+    "log_at_most_logs_up_to_n_times",
+    woof.Warning,
+    "spam",
+    [],
+  )
+  woof.log_at_most(
+    2,
+    "log_at_most_logs_up_to_n_times",
+    woof.Warning,
+    "spam",
+    [],
+  )
+  woof.log_at_most(
+    2,
+    "log_at_most_logs_up_to_n_times",
+    woof.Warning,
+    "spam",
+    [],
+  )
+
+  get() |> list.length |> should.equal(2)
+  reset()
+}
+
+pub fn log_at_most_tracks_keys_independently_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.log_at_most(
+    1,
+    "log_at_most_tracks_keys_independently_a",
+    woof.Info,
+    "a",
+    [],
+  )
+  woof.log_at_most(
+    1,
+    "log_at_most_tracks_keys_independently_b",
+    woof.Info,
+    "b",
+    [],
+  )
+
+  get() |> list.length |> should.equal(2)
+  reset()
+}
+
+pub fn redact_event_sink_does_not_touch_other_field_types_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  let redacted = woof.redact_event_sink(["secret"], sink)
+  woof.set_event_sink(redacted)
+
+  woof.info("x", [woof.int("count", 3), woof.bool("active", True)])
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    #("count", woof.FInt(3)),
+    #("active", woof.FBool(True)),
+  ])
+  reset()
+}

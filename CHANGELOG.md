@@ -3,6 +3,54 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-07-30
+
+### Added
+
+- **Production-hardening sink wrappers**, composable with `|>` like
+  `filter_event_sink`:
+
+  - `redact_event_sink(keys, sink)` masks matching field keys with
+    `"[REDACTED]"`, recursively through nested `woof.map` fields.
+  - `sample_event_sink(rate, always_keep_above, sink)` keeps a random
+    fraction of events below a level floor.
+  - `consistent_sample_event_sink(rate, key_field, always_keep_above, sink)`
+    does the same, but deterministically by hashing `key_field` (FNV-1a),
+    so every log line sharing the same key - e.g. a `trace_id` - is kept
+    or dropped together.
+  - `rate_limit_event_sink(per_second, sink)` is a token-bucket flood
+    guard; each call creates its own independent bucket.
+  - `batch_event_sink(max_size, max_interval_ms, sink)` groups events into
+    a `fn(List(LogEvent)) -> Nil` batch sink, flushed by size or elapsed
+    time - turns N per-event deliveries into one call.
+
+  ```gleam
+  woof.set_event_sink(
+    otlp_http_sink
+    |> woof.redact_event_sink(["password", "authorization"])
+    |> woof.rate_limit_event_sink(2000)
+    |> woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error)
+    |> woof.batch_event_sink(200, 5000),
+  )
+  ```
+
+- **`error_with(message, err, fields)`** - logs at Error with an
+  `error.message` field prepended, aligned with the OTel `error.*`
+  convention.
+
+- **`log_at_most(n, key, level, message, fields)`** - logs at most `n`
+  times per `key`, for the rest of the process lifetime. No time window,
+  no reset - a hard cap, not a rate limit.
+
+- **`test/bench/woof_bench.gleam`** - benchmark comparing each wrapper
+  above against a direct sink. See
+  [docs/benchmarks.md](docs/benchmarks.md).
+
+- New documentation: [docs/production_setup.md](docs/production_setup.md)
+  and [docs/sink_composition.md](docs/sink_composition.md).
+
+Backwards-compatible - no existing API changed.
+
 ## [1.8.0] - 2026-05-17
 
 ### Added

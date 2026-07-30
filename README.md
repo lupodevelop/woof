@@ -1,3 +1,5 @@
+> ℹ️ **v1.9** adds production-hardening sink wrappers (`redact_event_sink`, `sample_event_sink`, `consistent_sample_event_sink`, `rate_limit_event_sink`, `batch_event_sink`), plus `error_with` and `log_at_most`.
+>
 > ℹ️ **v1.8** adds trace correlation (`with_trace`, `set_trace`, `current_trace`), the `OtlpJson` format with `format_event_otlp`, and OpenTelemetry resource attributes (`set_resource`, `get_resource`).
 >
 > ℹ️ **v1.7** adds `FList`/`FMap`/`FNull` variants, `list`/`map`/`null` constructors, `vstr`/`vint`/`vfloat`/`vbool`/`vnull` raw helpers, native typed JSON output, and public `format_event_*` helpers.
@@ -153,6 +155,34 @@ woof.set_event_sink(woof.filter_event_sink(
 ))
 ```
 
+## Production hardening
+
+Redact secrets, cap volume, and batch deliveries by composing sink
+wrappers - redact first, batch last:
+
+```gleam
+woof.set_event_sink(
+  otlp_http_sink
+  |> woof.redact_event_sink(["password", "authorization"])
+  |> woof.rate_limit_event_sink(2000)
+  |> woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error)
+  |> woof.batch_event_sink(200, 5000),
+)
+```
+
+`error_with` and `log_at_most` cover two more common cases: a structured
+error field, and capping a noisy log line without an `if` at every call
+site.
+
+```gleam
+woof.error_with("payment failed", "timeout", [woof.str("order_id", "O1")])
+woof.log_at_most(5, "db_retry_failed", woof.Warning, "retry failed", [])
+```
+
+See [docs/production_setup.md](docs/production_setup.md) for the reasoning
+behind the composition order and [docs/guide.md](docs/guide.md) for the
+full reference.
+
 ## Debugging helpers
 
 ```gleam
@@ -213,10 +243,13 @@ woof.configure(woof.Config(woof.Info, woof.OtlpJson, woof.Never))
 | Document | Contents |
 | :--- | :--- |
 | [docs/guide.md](docs/guide.md) | Full reference: levels, formats, sinks, context, BEAM integration, API table |
+| [docs/production_setup.md](docs/production_setup.md) | Composing v1.9 sink wrappers for production |
+| [docs/sink_composition.md](docs/sink_composition.md) | Why sink wrapper order matters |
+| [docs/benchmarks.md](docs/benchmarks.md) | Measured overhead of each sink wrapper |
 | [docs/semantic_conventions.md](docs/semantic_conventions.md) | Standard field names for queryable logs |
 | [docs/log_levels.md](docs/log_levels.md) | Choosing the right log level |
 | [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 - what changed and how to fix it |
-| [roadmap.md](roadmap.md) | Future releases v1.8 to v2.0 |
+| [ROADMAP.md](ROADMAP.md) | Future releases v1.9 to v2.0 |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [hexdocs.pm/woof](https://hexdocs.pm/woof/) | Generated module reference |
 

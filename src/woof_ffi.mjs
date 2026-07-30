@@ -134,6 +134,40 @@ export function beam_event_log(level, message, _fields, _namespace) {
   return undefined;
 }
 
+// Mutable box - a single-slot mutable cell. On JS this is trivially a
+// plain object; on Erlang it needs a private ETS table (see woof_ffi.erl)
+// since Gleam values captured in a closure are otherwise immutable there.
+export function box_new(initial) {
+  return { v: initial };
+}
+
+export function box_get(box) {
+  return box.v;
+}
+
+export function box_set(box, v) {
+  box.v = v;
+  return undefined;
+}
+
+// Uniform random float in [0, 1) - backs sample_event_sink.
+export function random_float() {
+  return Math.random();
+}
+
+// log_at_most/5 per-key counters - module-level (JS is single-threaded),
+// same storage strategy as `state` above.
+let log_at_most_counts = undefined;
+
+export function get_log_at_most(fallback) {
+  return log_at_most_counts === undefined ? fallback : log_at_most_counts;
+}
+
+export function set_log_at_most(counts) {
+  log_at_most_counts = counts;
+  return undefined;
+}
+
 export function get_env(name) {
   try {
     if (typeof process !== "undefined" && process.env) {
