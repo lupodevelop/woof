@@ -7,7 +7,9 @@
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
          test_event_fields/1, test_event_namespace/1, test_event_get_int_field/2,
-         safe_call_fn/1, log/2]).
+         safe_call_fn/1, log/2,
+         box_new/1, box_get/1, box_set/2, random_float/0,
+         get_log_at_most/1, set_log_at_most/1]).
 
 %% woof FFI - Erlang target
 %% Global config - stored in persistent_term (erts, always available).
@@ -144,6 +146,44 @@ safe_call_fn(F) ->
                       [Class, Reason]),
             nil
     end.
+
+%% ── Mutable box ─────────────────────────────────────────────────────────
+%% A single-slot mutable cell, backed by a private ETS table so each box
+%% is independent of every other (unlike woof_state, which is one shared
+%% persistent_term).  Used by stateful sink wrappers (rate_limit_event_sink,
+%% batch_event_sink, log_at_most) to hold per-instance state across calls.
+
+box_new(Initial) ->
+    Tab = ets:new(woof_box, [set, public]),
+    ets:insert(Tab, {v, Initial}),
+    Tab.
+
+box_get(Tab) ->
+    [{v, V}] = ets:lookup(Tab, v),
+    V.
+
+box_set(Tab, V) ->
+    ets:insert(Tab, {v, V}),
+    nil.
+
+%% Uniform random float in [0.0, 1.0) - backs sample_event_sink.
+
+random_float() ->
+    rand:uniform().
+
+%% log_at_most/5 per-key counters - process (BEAM node) wide, same storage
+%% strategy as woof_state: persistent_term, since the cap is meant to be
+%% global, not per-caller.
+
+get_log_at_most(Default) ->
+    case persistent_term:get(woof_log_at_most, undefined) of
+        undefined -> Default;
+        Counts    -> Counts
+    end.
+
+set_log_at_most(Counts) ->
+    persistent_term:put(woof_log_at_most, Counts),
+    nil.
 
 %% Read an environment variable.  Returns {ok, Value} or {error, nil}.
 

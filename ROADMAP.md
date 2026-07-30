@@ -3,7 +3,7 @@
 The path from v1.6 to v2.0. Four releases that take woof from a "data-driven
 logging frontend" to the standard logging library for Gleam.
 
-**Current version:** v1.8.0
+**Current version:** v1.9.0
 
 ## Upcoming releases at a glance
 
@@ -12,7 +12,7 @@ logging frontend" to the standard logging library for Gleam.
 | v1.7 | Complete data model | `FList`, `FMap`, `FNull` with native JSON output | shipped |
 | v1.7.1 | Robustness patch | NaN/Inf JSON safety, ANSI strip in Text, sink crash isolation | shipped |
 | v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | shipped |
-| v1.9 | Production hardening | Sampling, rate limiting, redaction, cardinality cap, benchmarks | planned |
+| v1.9 | Production hardening | Sampling, rate limiting, redaction, batching, benchmarks | shipped |
 | v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers | planned |
 
 ## v1.7: Complete Data Model and Native JSON
@@ -52,7 +52,10 @@ Closes the biggest credibility gap versus mature loggers in other ecosystems
 ## v1.9: Production Hardening
 
 The features that separate a hobby logger from production-grade
-infrastructure.
+infrastructure. Trimmed from the initial draft after review: `log_if` and
+`rename_event_sink` were cut (both are a few lines the caller can write
+directly - not worth a maintained API), and `limit_fields_event_sink` was
+moved to "Out of scope" pending a concrete use case (see below).
 
 * Composable sink wrappers (operate on `EventSink`):
   * `sample_event_sink(rate, always_keep_above, sink)` probabilistic sampling
@@ -62,17 +65,19 @@ infrastructure.
     stays together as a group
   * `rate_limit_event_sink(per_second, sink)` token-bucket flood protection
   * `redact_event_sink(keys, sink)` PII / secret masking, recursive
-  * `limit_fields_event_sink(max_fields, sink)` cardinality cap
-  * `rename_event_sink(rules, sink)` field name normalization
-* Conditional logging: `log_if(condition, level, message, fields)` and
-  `log_at_most(n, key, level, message, fields)`
+  * `batch_event_sink(max_size, max_interval_ms, sink)` groups events into
+    a `fn(List(LogEvent)) -> Nil` batch sink, flushed by size or time -
+    turns N per-event deliveries into one call, for backends that charge
+    or add latency per request
+* `log_at_most(n, key, level, message, fields)` caps a log line to the
+  first `n` calls sharing `key`, for the rest of the process lifetime
 * `error_with(message, err, fields)` structured error helper aligned with
   OTel `error.*` conventions
-* `bench/` directory with criterion-style benchmarks vs raw OTP
-  `logger:log/4`
+* `test/bench/woof_bench.gleam` - criterion-style benchmark vs a direct
+  sink for every wrapper above (lives under `test/`, not a top-level
+  `bench/`, since Gleam only compiles `src/` and `test/`)
 * New documentation:
   * `docs/production_setup.md`
-  * `docs/cardinality.md`
   * `docs/sink_composition.md`
   * `docs/benchmarks.md`
 
@@ -129,9 +134,12 @@ Considered and intentionally excluded:
   sink composition primitives are sufficient to build them.
 * **Transparent / Hybrid BEAM mode flag.** The BEAM sink already delegates
   to OTP by default; an extra mode adds complexity without clear benefit.
-* **Cardinality sanitiser as a hard runtime constraint.** Documentation
-  plus `limit_fields_event_sink` (v1.9) cover this without policing user
-  code.
+* **`limit_fields_event_sink(max_fields, sink)` cardinality cap.** Drafted
+  for v1.9, then cut: field-count cardinality is primarily a *metrics*
+  cost problem (unique label combinations multiply storage), less clearly
+  one for logs, where the fields that matter vary per event by design.
+  Reconsider if a concrete production case shows uncapped field counts
+  causing real cost or noise - not before.
 * **Sharded fan-out (`shard_event_sink`) and full consistent-hashing
   ring with virtual nodes.** v1.9 ships `consistent_sample_event_sink`
   for trace-coherent sampling, which is the strong, demanded use case.

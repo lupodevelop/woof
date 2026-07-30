@@ -17,14 +17,15 @@ For upgrading from v1.2 see [migration_v1_3.md](migration_v1_3.md).
 7. [Namespaced loggers](#namespaced-loggers)
 8. [Context](#context)
 9. [Sinks](#sinks)
-10. [Testing](#testing)
-11. [Lazy evaluation](#lazy-evaluation)
-12. [Pipeline helpers](#pipeline-helpers)
-13. [Configuration](#configuration)
-14. [Colors](#colors)
-15. [BEAM logger integration](#beam-logger-integration)
-16. [Cross-platform notes](#cross-platform-notes)
-17. [API reference](#api-reference)
+10. [Production hardening](#production-hardening-v19)
+11. [Testing](#testing)
+12. [Lazy evaluation](#lazy-evaluation)
+13. [Pipeline helpers](#pipeline-helpers)
+14. [Configuration](#configuration)
+15. [Colors](#colors)
+16. [BEAM logger integration](#beam-logger-integration)
+17. [Cross-platform notes](#cross-platform-notes)
+18. [API reference](#api-reference)
 
 ---
 
@@ -697,6 +698,103 @@ woof.set_sink(fn(entry, formatted) {
 
 ---
 
+## Production hardening (v1.9)
+
+Five composable wrappers plus two helpers, aimed at the costs that show up
+once a service is under real traffic: storage, I/O, secrets, and log spam.
+See [production_setup.md](production_setup.md) for a full pipeline example
+and [sink_composition.md](sink_composition.md) for why the order you
+compose them in matters.
+
+### `redact_event_sink` - masking secrets
+
+Wraps an `EventSink` so fields whose key is in `keys` are replaced with
+`"[REDACTED]"` before reaching it, recursively through nested `woof.map`
+fields:
+
+```gleam
+woof.set_event_sink(woof.redact_event_sink(["password", "token"], sink))
+```
+
+### `sample_event_sink` and `consistent_sample_event_sink` - volume control
+
+Both keep a `rate` fraction of events (`0.0` drops everything, `1.0` keeps
+everything) below `always_keep_above`, and always pass events at or above
+it:
+
+```gleam
+// Independent coin flip per event.
+woof.set_event_sink(woof.sample_event_sink(0.1, woof.Error, sink))
+
+// Deterministic by key_field: every log line sharing the same trace_id
+// is kept or dropped together, so a trace never loses part of itself.
+woof.set_event_sink(woof.consistent_sample_event_sink(
+  0.1, "trace_id", woof.Error, sink,
+))
+```
+
+`consistent_sample_event_sink` passes an event through untouched when
+`key_field` is missing from its fields - a misconfigured key should not
+silently drop logs it has no way to correlate.
+
+### `rate_limit_event_sink` - flood protection
+
+A token bucket capped at `per_second` events, refilling continuously. A
+burst up to `per_second` always goes through; beyond that, events are
+dropped until tokens refill. Protects whatever the wrapped sink talks to
+(network, disk, a billed API) from a sudden spike:
+
+```gleam
+woof.set_event_sink(woof.rate_limit_event_sink(1000, sink))
+```
+
+Each call to `rate_limit_event_sink` creates its own independent bucket.
+
+### `batch_event_sink` - grouping deliveries
+
+Unlike the wrappers above, the sink it wraps is not an `EventSink` - it is
+`fn(List(LogEvent)) -> Nil`, because the entire point is delivering many
+events per call instead of one. A batch flushes as soon as it reaches
+`max_size` events or `max_interval_ms` have passed, whichever comes first:
+
+```gleam
+woof.set_event_sink(woof.batch_event_sink(100, 5000, fn(events) {
+  send_to_log_backend(events)
+}))
+```
+
+There is no background timer: a partial batch only flushes when the next
+event arrives and a threshold is checked again. If traffic stops, the last
+partial batch stays buffered until the next event or process exit - call
+the returned sink periodically yourself if you need a hard latency bound
+during idle periods.
+
+### `error_with` - structured error field
+
+`error()` with an `error.message` field prepended, aligned with the
+OpenTelemetry `error.*` convention documented in
+[semantic_conventions.md](semantic_conventions.md):
+
+```gleam
+woof.error_with("payment failed", "timeout", [woof.str("order_id", "O1")])
+// error.message: "timeout", order_id: "O1"
+```
+
+### `log_at_most` - spam control at the call site
+
+Logs at `level` for the first `n` calls sharing the same `key`, silently
+dropping every call after that - no time window, no reset, a hard cap on
+the process lifetime:
+
+```gleam
+woof.log_at_most(5, "db_retry_failed", woof.Warning, "retry failed", [])
+```
+
+Use a fixed key from the call site, not one derived from user input - the
+counter map grows with the cardinality of `key` and is never cleared.
+
+---
+
 ## Testing
 
 Use `test_sink()` to capture typed `LogEvent`s in tests without touching stdout.
@@ -1018,6 +1116,8 @@ behave identically on both targets.
 | `critical_lazy` | … | Lazy Critical |
 | `alert_lazy` | … | Lazy Alert |
 | `emergency_lazy` | … | Lazy Emergency |
+| `error_with` | `(String, String, List(#(String, FieldValue))) -> Nil` | Log at Error with an `error.message` field (v1.9) |
+| `log_at_most` | `(Int, String, Level, String, List(#(String, FieldValue))) -> Nil` | Log at most `n` times per `key` (v1.9) |
 
 ### Namespaced loggers
 
@@ -1073,6 +1173,11 @@ behave identically on both targets.
 | `set_event_sink` | `(EventSink) -> Nil` | Register typed sink `fn(LogEvent) -> Nil` |
 | `clear_event_sink` | `() -> Nil` | Remove the typed event sink |
 | `filter_event_sink` | `(fn(LogEvent) -> Bool, EventSink) -> EventSink` | Wrap an event sink with a predicate |
+| `redact_event_sink` | `(List(String), EventSink) -> EventSink` | Mask matching field keys (v1.9) |
+| `sample_event_sink` | `(Float, Level, EventSink) -> EventSink` | Random sampling below a level floor (v1.9) |
+| `consistent_sample_event_sink` | `(Float, String, Level, EventSink) -> EventSink` | Trace-coherent hashed sampling (v1.9) |
+| `rate_limit_event_sink` | `(Int, EventSink) -> EventSink` | Token-bucket flood protection (v1.9) |
+| `batch_event_sink` | `(Int, Int, fn(List(LogEvent)) -> Nil) -> EventSink` | Group events, flush by size/interval (v1.9) |
 | `emit` | `(LogEvent) -> Nil` | Dispatch a pre-built event to all sinks (no context merge, no level filter) |
 | `default_sink` | `Sink` | Prints to stdout (default) |
 | `beam_logger_sink` | `Sink` | Routes through OTP logger / console.* |
