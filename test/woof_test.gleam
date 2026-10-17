@@ -11,11 +11,20 @@ pub fn main() -> Nil {
   gleeunit.main()
 }
 
+@external(erlang, "woof_test_ffi", "catch_panic")
+@external(javascript, "./woof_test_ffi.mjs", "catch_panic")
+fn catch_panic(body: fn() -> a) -> Result(a, String)
+
+@external(erlang, "woof_test_ffi", "reset_scopes")
+@external(javascript, "./woof_test_ffi.mjs", "reset_scopes")
+fn reset_scopes() -> Nil
+
 // ---------------------------------------------------------------------------
 // Helpers - reset state between tests
 // ---------------------------------------------------------------------------
 
 fn reset() {
+  reset_scopes()
   woof.configure(woof.Config(
     level: woof.Debug,
     format: woof.Text,
@@ -452,6 +461,73 @@ pub fn context_restored_after_callback_test() {
 // ---------------------------------------------------------------------------
 // Global context
 // ---------------------------------------------------------------------------
+
+pub fn with_context_restores_after_panic_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let failure =
+    catch_panic(fn() {
+      woof.with_context([woof.str("secret", "temporary")], fn() {
+        panic as "context failure"
+      })
+    })
+  woof.info("after", [])
+  let assert [event] = get()
+  failure |> should.equal(Error("context failure"))
+  event.fields |> should.equal([])
+  reset()
+}
+
+pub fn with_context_restores_outer_scope_after_panic_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let value =
+    woof.with_context([woof.str("scope", "outer")], fn() {
+      let failure =
+        catch_panic(fn() {
+          woof.with_context([woof.str("scope", "inner")], fn() {
+            panic as "inner context failure"
+          })
+        })
+      failure |> should.equal(Error("inner context failure"))
+      woof.info("outer", [])
+      #("returned", 42)
+    })
+  woof.info("outside", [])
+
+  value |> should.equal(#("returned", 42))
+  let assert [outer, outside] = get()
+  outer.fields |> should.equal([woof.str("scope", "outer")])
+  outside.fields |> should.equal([])
+  reset()
+}
+
+pub fn with_scopes_restore_after_propagated_panic_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let failure =
+    catch_panic(fn() {
+      woof.with_context([woof.str("scope", "outer")], fn() {
+        woof.with_trace("trace", "span", fn() {
+          woof.with_context([woof.str("scope", "inner")], fn() {
+            panic as "nested failure"
+          })
+        })
+      })
+    })
+  woof.info("outside", [])
+  let assert [event] = get()
+  failure |> should.equal(Error("nested failure"))
+  event.fields |> should.equal([])
+  woof.current_trace() |> should.equal(None)
+  reset()
+}
 
 pub fn global_context_included_in_every_message_test() {
   reset()
@@ -3043,6 +3119,43 @@ pub fn with_trace_sets_scoped_trace_test() {
 pub fn with_trace_restores_after_body_test() {
   reset()
   woof.with_trace("t", "s", fn() { Nil })
+  woof.current_trace() |> should.equal(None)
+  reset()
+}
+
+pub fn with_trace_restores_after_panic_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  let failure =
+    catch_panic(fn() {
+      woof.with_trace("trace", "span", fn() { panic as "trace failure" })
+    })
+  woof.info("outside", [])
+  let assert [event] = get()
+  failure |> should.equal(Error("trace failure"))
+  woof.current_trace() |> should.equal(None)
+  event.fields |> should.equal([])
+  reset()
+}
+
+pub fn with_trace_restores_outer_scope_after_panic_test() {
+  reset()
+
+  let value =
+    woof.with_trace("outer-trace", "outer-span", fn() {
+      let failure =
+        catch_panic(fn() {
+          woof.with_trace("inner-trace", "inner-span", fn() {
+            panic as "inner trace failure"
+          })
+        })
+      failure |> should.equal(Error("inner trace failure"))
+      woof.current_trace()
+    })
+
+  value |> should.equal(Some(#("outer-trace", "outer-span")))
   woof.current_trace() |> should.equal(None)
   reset()
 }

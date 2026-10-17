@@ -1147,9 +1147,7 @@ pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
 pub fn with_context(fields: List(#(String, FieldValue)), body: fn() -> a) -> a {
   let previous = ffi_get_context([])
   ffi_set_context(list.append(previous, fields))
-  let value = body()
-  ffi_set_context(previous)
-  value
+  ffi_with_cleanup(body, fn() { ffi_set_context(previous) })
 }
 
 /// Set fields that appear on **every** log message globally.
@@ -1195,9 +1193,7 @@ pub fn append_global_context(fields: List(#(String, FieldValue))) -> Nil {
 pub fn with_trace(trace_id: String, span_id: String, body: fn() -> a) -> a {
   let previous = ffi_get_trace(None)
   ffi_set_trace(Some(#(trace_id, span_id)))
-  let value = body()
-  ffi_set_trace(previous)
-  value
+  ffi_with_cleanup(body, fn() { ffi_set_trace(previous) })
 }
 
 /// Read the trace currently in scope, if any.
@@ -2097,6 +2093,10 @@ fn level_color(level: Level) -> String {
 // ---------------------------------------------------------------------------
 // FFI bindings
 // ---------------------------------------------------------------------------
+
+@external(erlang, "woof_ffi", "with_cleanup")
+@external(javascript, "./woof_ffi.mjs", "with_cleanup")
+fn ffi_with_cleanup(body: fn() -> a, cleanup: fn() -> Nil) -> a
 
 @external(erlang, "woof_ffi", "get_state")
 @external(javascript, "./woof_ffi.mjs", "get_state")
