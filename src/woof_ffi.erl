@@ -7,7 +7,7 @@
          install_test_handler/0, remove_test_handler/0, pop_test_event/0,
          test_event_level/1, test_event_message/1, test_event_domain_is_woof/1,
          test_event_fields/1, test_event_namespace/1, test_event_get_int_field/2,
-         safe_call_fn/1, log/2,
+         safe_call_fn/1, with_cleanup/2, log/2,
          box_new/1, box_get/1, box_set/2, random_float/0,
          get_log_at_most/1, set_log_at_most/1]).
 
@@ -20,6 +20,9 @@ get_state(Default) ->
         undefined -> Default;
         State     -> State
     end.
+
+with_cleanup(Body, Cleanup) ->
+    try Body() after Cleanup() end.
 
 set_state(State) ->
     persistent_term:put(woof_state, State),

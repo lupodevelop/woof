@@ -12,6 +12,14 @@ let state = undefined;
 let context = undefined;
 let trace = undefined;
 
+export function with_cleanup(body, cleanup) {
+  try {
+    return body();
+  } finally {
+    cleanup();
+  }
+}
+
 export function get_state(fallback) {
   return state === undefined ? fallback : state;
 }
