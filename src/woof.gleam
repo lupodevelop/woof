@@ -516,13 +516,17 @@ fn redact_fields(
     let #(k, v) = pair
     case list.contains(keys, k) {
       True -> #(k, FString("[REDACTED]"))
-      False ->
-        case v {
-          FMap(pairs) -> #(k, FMap(redact_fields(keys, pairs)))
-          _ -> #(k, v)
-        }
+      False -> #(k, redact_value(keys, v))
     }
   })
+}
+
+fn redact_value(keys: List(String), value: FieldValue) -> FieldValue {
+  case value {
+    FMap(pairs) -> FMap(redact_fields(keys, pairs))
+    FList(items) -> FList(list.map(items, redact_value(keys, _)))
+    _ -> value
+  }
 }
 
 /// Dispatch a pre-built `LogEvent` through every registered sink.

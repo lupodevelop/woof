@@ -3309,6 +3309,128 @@ pub fn redact_event_sink_masks_key_inside_nested_map_test() {
   reset()
 }
 
+pub fn redact_event_sink_masks_keys_in_list_maps_test() {
+  let #(sink, get) = woof.test_sink()
+  let event =
+    woof.LogEvent(
+      level: woof.Warning,
+      message: "users",
+      fields: [
+        woof.list("users", [
+          woof.FMap([woof.str("password", "secret"), woof.str("name", "ada")]),
+          woof.FMap([woof.str("name", "grace"), woof.str("password", "other")]),
+        ]),
+      ],
+      timestamp: "2026-10-17T00:00:00.000Z",
+      namespace: Some("auth"),
+    )
+
+  woof.redact_event_sink(["password"], sink)(event)
+
+  get()
+  |> should.equal([
+    woof.LogEvent(..event, fields: [
+      woof.list("users", [
+        woof.FMap([
+          woof.str("password", "[REDACTED]"),
+          woof.str("name", "ada"),
+        ]),
+        woof.FMap([
+          woof.str("name", "grace"),
+          woof.str("password", "[REDACTED]"),
+        ]),
+      ]),
+    ]),
+  ])
+}
+
+pub fn redact_event_sink_traverses_mixed_containers_test() {
+  let #(sink, get) = woof.test_sink()
+  let unchanged = [
+    woof.vstr("visible"),
+    woof.vint(42),
+    woof.vfloat(1.5),
+    woof.vbool(True),
+    woof.vnull(),
+    woof.FList([]),
+    woof.FMap([]),
+  ]
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "nested",
+      fields: [
+        woof.map("payload", [
+          woof.list("items", [
+            woof.FList([
+              woof.FMap([
+                woof.str("token", "secret"),
+                woof.str("Token", "case sensitive"),
+                woof.list("values", unchanged),
+              ]),
+            ]),
+          ]),
+        ]),
+      ],
+      timestamp: "2026-10-17T00:00:00.000Z",
+      namespace: None,
+    )
+
+  woof.redact_event_sink(["token"], sink)(event)
+
+  get()
+  |> should.equal([
+    woof.LogEvent(..event, fields: [
+      woof.map("payload", [
+        woof.list("items", [
+          woof.FList([
+            woof.FMap([
+              woof.str("token", "[REDACTED]"),
+              woof.str("Token", "case sensitive"),
+              woof.list("values", unchanged),
+            ]),
+          ]),
+        ]),
+      ]),
+    ]),
+  ])
+}
+
+pub fn redact_event_sink_masks_matching_container_values_test() {
+  let #(sink, get) = woof.test_sink()
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "containers",
+      fields: [
+        woof.list("items", [
+          woof.FMap([
+            woof.list("secret", [woof.vstr("hidden")]),
+            woof.map("secret", [woof.int("code", 42)]),
+            woof.null("secret"),
+          ]),
+        ]),
+      ],
+      timestamp: "2026-10-17T00:00:00.000Z",
+      namespace: None,
+    )
+
+  woof.redact_event_sink(["secret"], sink)(event)
+
+  get()
+  |> should.equal([
+    woof.LogEvent(..event, fields: [
+      woof.list("items", [
+        woof.FMap([
+          woof.str("secret", "[REDACTED]"),
+          woof.str("secret", "[REDACTED]"),
+          woof.str("secret", "[REDACTED]"),
+        ]),
+      ]),
+    ]),
+  ])
+}
+
 pub fn redact_event_sink_passthrough_when_key_absent_test() {
   reset()
   let #(sink, get) = woof.test_sink()
