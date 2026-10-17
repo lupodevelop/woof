@@ -961,6 +961,29 @@ pub fn log(
   )
 }
 
+/// Build the message and fields only when the level is enabled.
+pub fn log_lazy(
+  logger: Logger,
+  level: Level,
+  build: fn() -> #(String, List(#(String, FieldValue))),
+) -> Nil {
+  let state = read_state()
+  case should_log(level, state.level) {
+    False -> Nil
+    True -> {
+      let #(message, fields) = build()
+      do_emit(
+        state,
+        level,
+        message,
+        list.append(logger.context, fields),
+        logger.namespace,
+        logger.trace,
+      )
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Field constructors - typed (v1.3)
 // ---------------------------------------------------------------------------

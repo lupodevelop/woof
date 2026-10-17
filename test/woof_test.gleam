@@ -1692,6 +1692,114 @@ pub fn logger_set_context_carries_fields_test() {
   reset()
 }
 
+pub fn log_lazy_skips_disabled_level_test() {
+  reset()
+  woof.set_level(woof.Info)
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.new("db")
+  |> woof.log_lazy(woof.Debug, fn() { panic as "disabled builder ran" })
+
+  get() |> should.equal([])
+  reset()
+}
+
+pub fn log_lazy_evaluates_once_at_minimum_level_test() {
+  reset()
+  woof.set_level(woof.Warning)
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+
+  woof.new("db")
+  |> woof.log_lazy(woof.Warning, fn() {
+    woof.warning("building", [])
+    #("slow query", [woof.int("duration_ms", 42)])
+  })
+
+  let assert [built, event] = get()
+  built.message |> should.equal("building")
+  event.message |> should.equal("slow query")
+  event.level |> should.equal(woof.Warning)
+  event.namespace |> should.equal(Some("db"))
+  event.fields |> should.equal([woof.int("duration_ms", 42)])
+  reset()
+}
+
+pub fn log_lazy_merges_context_and_preserves_types_test() {
+  reset()
+  woof.set_global_context([woof.str("app", "checkout")])
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  let logger = woof.new("db") |> woof.set_context([woof.str("pool", "rw")])
+  let fields = [
+    woof.int("count", 42),
+    woof.float("ratio", 1.5),
+    woof.bool("cached", True),
+    woof.null("optional"),
+    woof.list("items", [woof.FMap([woof.str("name", "widget")])]),
+    woof.str("pool", "inline"),
+  ]
+
+  woof.with_context([woof.str("request_id", "req-1")], fn() {
+    logger |> woof.log_lazy(woof.Info, fn() { #("query", fields) })
+  })
+
+  let assert [event] = get()
+  event.message |> should.equal("query")
+  event.namespace |> should.equal(Some("db"))
+  event.fields
+  |> should.equal([
+    woof.str("app", "checkout"),
+    woof.str("request_id", "req-1"),
+    woof.str("pool", "rw"),
+    ..fields
+  ])
+  reset()
+}
+
+pub fn log_lazy_prefers_inherited_logger_trace_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  let logger =
+    woof.new("db")
+    |> woof.set_trace("logger-trace", "logger-span")
+    |> woof.child("query")
+
+  woof.with_trace("scoped-trace", "scoped-span", fn() {
+    logger |> woof.log_lazy(woof.Info, fn() { #("query", []) })
+  })
+
+  let assert [event] = get()
+  event.namespace |> should.equal(Some("db.query"))
+  event.fields
+  |> should.equal([
+    woof.str("trace_id", "logger-trace"),
+    woof.str("span_id", "logger-span"),
+  ])
+  reset()
+}
+
+pub fn log_lazy_uses_scoped_trace_test() {
+  reset()
+  let #(sink, get) = woof.test_sink()
+  woof.set_event_sink(sink)
+  let logger = woof.new("db")
+
+  woof.with_trace("scoped-trace", "scoped-span", fn() {
+    logger |> woof.log_lazy(woof.Info, fn() { #("query", []) })
+  })
+
+  let assert [event] = get()
+  event.fields
+  |> should.equal([
+    woof.str("trace_id", "scoped-trace"),
+    woof.str("span_id", "scoped-span"),
+  ])
+  reset()
+}
+
 pub fn logger_context_merges_before_inline_fields_test() {
   reset()
   let #(sink, get) = woof.test_sink()
