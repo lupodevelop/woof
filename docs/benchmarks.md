@@ -16,9 +16,11 @@ gleam run -m bench/woof_bench --target javascript # JavaScript target
 
 ## Results
 
-Measured on a development machine (Erlang/OTP 28, Node.js 25), 100,000
+Recorded for v1.9 on a development machine (Erlang/OTP 28, Node.js 25), 100,000
 events per row. Absolute numbers vary by machine - what matters is the
 relative cost between rows and whether it changes release to release.
+These measurements have not been rerun for v1.10 and do not measure the new
+fan-out or lazy logging APIs.
 
 ### Erlang target
 
@@ -49,11 +51,10 @@ relative cost between rows and whether it changes release to release.
   extra work per event (a list scan, a hash, a float comparison) is small
   next to everything else `woof.info` already does (context merge,
   formatting, field serialisation).
-- `batch_event_sink` costs more on the Erlang target because every call
-  allocates a fresh ETS-backed `Box` read/write for the buffer instead of a
-  handful of arithmetic ops - still a small multiple, not an order of
-  magnitude, and the cost buys fewer downstream deliveries in exchange.
+- `batch_event_sink` reads and writes an ETS-backed buffer on Erlang. It also
+  traverses the pending list to check its size and reverses it on delivery.
+  The table is allocated when the wrapper is constructed, not on every event.
 - These numbers measure wrapper overhead in isolation, not a realistic
   pipeline. Composing several wrappers (see
-  [production_setup.md](production_setup.md)) adds their costs roughly
-  linearly - none of them do enough work to interact with each other.
+  [production_setup.md](production_setup.md)) changes how many events reach
+  later wrappers, so measure the actual pipeline for workload-specific costs.

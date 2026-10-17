@@ -79,7 +79,7 @@ pub type Level {
 ///   `Text` readability and `Json` parsability.
 /// - `OtlpJson` - one OpenTelemetry-shaped JSON object per line, with
 ///   `severity_number`, `body`, `attributes`, and (when present) `trace_id`,
-///   `span_id`, and `resource`.  Use this to feed an OTLP log pipeline.
+///   `span_id`, and `resource`. An adapter supplies OTLP export framing and transport.
 /// - `Custom` - bring your own formatter. The function receives a fully
 ///   assembled `Entry` and must return the string to print.  This is the
 ///   escape hatch for integrating with other formatting or output libraries.
@@ -328,9 +328,8 @@ pub fn filter_event_sink(
 /// Wrap an `EventSink` so fields whose key is in `keys` are masked before
 /// reaching it - PII / secret redaction.
 ///
-/// Matching is by exact key name, recursively: a key inside a nested
-/// `FMap` (built with `woof.map`) is masked too. The matched value is
-/// replaced with `FString("[REDACTED]")` regardless of its original type.
+/// Matching is by exact key name, recursively through maps and lists.
+/// Matched values become `FString("[REDACTED]")` regardless of type.
 ///
 /// ```gleam
 /// woof.set_event_sink(woof.redact_event_sink(["password", "token"], sink))
@@ -454,15 +453,14 @@ pub fn rate_limit_event_sink(per_second: Int, sink: EventSink) -> EventSink {
 /// `sink` receives the accumulated events, not one at a time - it takes
 /// `fn(List(LogEvent)) -> Nil`, not an `EventSink`. A batch is flushed as
 /// soon as it reaches `max_size` events, or as soon as `max_interval_ms`
-/// have elapsed since the batch started, whichever comes first.
+/// have elapsed since construction or the previous flush, whichever comes first.
 ///
 /// This wrapper never runs a background timer: a partial batch only
 /// flushes when the next event arrives and one of the two conditions is
 /// checked again. If traffic stops, the last partial batch stays buffered
-/// until the next event or process exit. Acceptable for a synchronous
-/// wrapper; call the returned sink periodically yourself (e.g. from a
-/// scheduled health-check log) if you need a hard upper bound on delivery
-/// latency during idle periods.
+/// indefinitely. There is no explicit flush API or automatic shutdown delivery.
+/// On BEAM, the creating process owns the buffer and concurrent updates are
+/// not atomic; use a single long-lived caller.
 ///
 /// ```gleam
 /// woof.set_event_sink(woof.batch_event_sink(100, 5000, fn(events) {
@@ -658,15 +656,15 @@ pub fn silent_sink(_entry: Entry, _formatted: String) -> Nil {
 }
 
 /// Configure woof for **development**: `Debug` level, `Text` format, `Auto`
-/// colors, stdout output.  Clears any previously registered sinks.
+/// colors, stdout output. Replaces legacy sinks; the typed event sink is unchanged.
 pub fn dev() -> Nil {
   configure(Config(level: Debug, format: Text, colors: Auto))
   set_sinks([default_sink])
 }
 
 /// Configure woof for **production**: `Info` level, `Json` format, no
-/// colors, OTP logger output via `beam_logger_sink`.  Clears any previously
-/// registered sinks.
+/// colors, OTP logger output via `beam_logger_sink`. Replaces legacy sinks;
+/// the typed event sink is unchanged.
 pub fn prod() -> Nil {
   configure(Config(level: Info, format: Json, colors: Never))
   set_sinks([beam_logger_sink])
@@ -1131,19 +1129,19 @@ pub fn bool_field(key: String, value: Bool) -> #(String, FieldValue) {
 
 /// Run `body` with extra fields attached to every log call inside it.
 ///
-/// Fields from the context are merged with inline fields.  If a key appears
-/// in both, the inline value wins (it comes last in the list).
+/// Context fields precede inline fields. Duplicate keys are preserved;
+/// the destination determines how they are interpreted.
 ///
 /// Contexts can be nested - inner fields accumulate on top of outer ones.
+/// The previous context is restored even if `body` raises; errors propagate.
 ///
 /// On the BEAM each process gets its own context (process dictionary), so
 /// concurrent request handlers never interfere with each other.
 ///
 /// **Notice for JavaScript async users**: On the JavaScript target, because
 /// JS uses cooperative concurrency and is single-threaded, `with_context`
-/// modifies a global state. If your callback enters an async sleep/promise,
-/// the context might be overwritten by other concurrent tasks. Use with
-/// caution in highly concurrent async Node/Deno servers.
+/// modifies module-level state only until the callback returns. It does not
+/// follow Promise continuations; pass a logger instance through async work.
 pub fn with_context(fields: List(#(String, FieldValue)), body: fn() -> a) -> a {
   let previous = ffi_get_context([])
   ffi_set_context(list.append(previous, fields))
@@ -1179,7 +1177,7 @@ pub fn append_global_context(fields: List(#(String, FieldValue))) -> Nil {
 /// Each log emitted within `body` carries `trace_id` and `span_id` fields,
 /// using the OpenTelemetry-conventional names.  Traces nest: an inner
 /// `with_trace` shadows an outer one and the outer trace is restored when
-/// the inner body returns.
+/// the inner body returns or raises. Errors propagate to the caller.
 ///
 /// On the BEAM the trace lives in the process dictionary, so concurrent
 /// request handlers never share a trace.  The JavaScript caveat from

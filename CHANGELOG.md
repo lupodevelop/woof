@@ -3,6 +3,32 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] - 2026-10-17
+
+### Added
+
+- `fanout_event_sink(sinks)` forwards each typed event synchronously to every
+  destination in order, isolating failures per sink. An empty list discards events.
+- `log_lazy(logger, level, build)` constructs the message and typed fields only
+  when the level is enabled. The builder runs once and returns `#(message, fields)`;
+  logger context, namespace and trace precedence match `log`.
+
+### Fixed
+
+- JSON formatters escape all control characters from U+0000 through U+001F in
+  messages, keys and values, including nested fields. Existing escapes and Unicode
+  output are preserved.
+- `redact_event_sink` traverses lists as well as maps, masking matching keys in
+  mixed nested structures while preserving unrelated values and field order.
+- `with_context` and `with_trace` restore the previous scope when callbacks raise,
+  including nested scopes. Errors still propagate and return values are preserved.
+- Correct sink composition examples and document typed fan-out, lazy fields,
+  per-destination redaction and batching limits.
+
+No public APIs were removed or renamed. Existing signatures and defaults remain
+unchanged. Output changes are limited to previously unescaped control characters
+and previously unmasked secrets inside lists.
+
 ## [1.9.0] - 2026-07-30
 
 ### Added
@@ -25,13 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     time - turns N per-event deliveries into one call.
 
   ```gleam
-  woof.set_event_sink(
-    otlp_http_sink
-    |> woof.redact_event_sink(["password", "authorization"])
-    |> woof.rate_limit_event_sink(2000)
-    |> woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error)
-    |> woof.batch_event_sink(200, 5000),
-  )
+  let batched = woof.batch_event_sink(200, 5000, send_batch)
+  let sampled = woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error, batched)
+  let limited = woof.rate_limit_event_sink(2000, sampled)
+  woof.set_sinks([])
+  woof.set_event_sink(woof.redact_event_sink(["password", "authorization"], limited))
   ```
 
 - **`error_with(message, err, fields)`** - logs at Error with an

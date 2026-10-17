@@ -109,6 +109,7 @@ fn my_sink(event: woof.LogEvent) -> Nil {
       FBool(b)   -> record_flag(key, b)
       FString(s) -> record_tag(key, s)
       FFloat(f)  -> record_gauge(key, f)
+      _ -> Nil
     }
   })
 }
@@ -172,7 +173,7 @@ Eight levels ordered by severity - matching the OTP / syslog scale:
 | `Alert` | `[ALERT]` | Immediate human action required |
 | `Emergency` | `[EMERG]` | System is completely unusable |
 
-Set the minimum - messages below it are dropped before any allocation:
+Set the minimum - messages below it skip event construction and dispatch:
 
 ```gleam
 woof.set_level(woof.Warning)
@@ -251,6 +252,10 @@ Field values are emitted as **native JSON types** since v1.7:
 Reserved keys (`level`, `time`, `ns`, `msg`) are prefixed with `_` if a field key
 collides with them.
 
+All control characters from U+0000 through U+001F are escaped in messages, keys
+and string values, including nested data. Unicode text is preserved. Non-finite
+floating-point values on JavaScript are emitted as `null`.
+
 > **Migration note.** Before v1.7, all values were stringified
 > (`"amount_cents":"4999"`, `"express":"true"`). Programs that grep-parsed
 > JSON for stringified numbers or booleans must update; real JSON parsers
@@ -272,8 +277,9 @@ Values that contain spaces, `=`, or are empty are automatically quoted.
 
 ### OtlpJson (v1.8)
 
-One OpenTelemetry-shaped JSON object per line. Use this to feed an OTLP log
-pipeline.
+One OpenTelemetry-shaped JSON object per line. This is a per-event representation,
+not an OTLP export request or an HTTP exporter. Your adapter owns conversion to
+the backend's expected payload and transport.
 
 ```gleam
 woof.set_format(woof.OtlpJson)
@@ -337,7 +343,8 @@ names.
 ### Scoped: `with_trace`
 
 Every log emitted inside the body carries the trace. Traces nest, and the
-outer trace is restored when the inner body returns.
+outer trace is restored when the inner body returns or raises. Exceptions still
+propagate and callback return values are preserved.
 
 ```gleam
 woof.with_trace(trace_id, span_id, fn() {
@@ -482,8 +489,8 @@ let api = woof.new("api")
 let users = woof.child(api, "users")
 // users carries: service="api", env="prod"
 
-users |> woof.append_context([woof.str("endpoint", "/users")])
-// users now carries: service, env, endpoint. api still carries only service+env
+let users = users |> woof.append_context([woof.str("endpoint", "/users")])
+// The returned users logger carries service, env, endpoint; api is unchanged.
 ```
 
 Loggers are immutable values. `child(parent, ...)` never mutates `parent`.
@@ -493,6 +500,9 @@ Merge order across all context sources:
 ```
 global context  →  scoped (with_context)  →  logger.context  →  inline fields
 ```
+
+Merging appends fields in that order and preserves duplicate keys. Destinations
+determine how duplicates are interpreted; woof does not normalize them.
 
 > **JavaScript async code** - instanced loggers are the recommended pattern on JS.
 > Because `with_context` uses a module-level variable, two concurrent Promise chains
@@ -534,12 +544,16 @@ woof.info("Processing", [])
 ```
 
 On the BEAM, `with_context` uses the process dictionary - concurrent request handlers
-never interfere. Fields from all three sources merge in order: global → scoped → inline.
+never interfere. Fields merge in order: global → scoped → logger context → inline.
 
 > **JavaScript async users** - `with_context` uses a module-level variable on JS.
-> If your callback `await`s (returns a `Promise`), the context may be overwritten by
-> another concurrent request. For heavily concurrent async JS code, pass context
-> explicitly rather than using `with_context`.
+> The scope ends when the callback returns, including when it returns a Promise.
+> It does not follow asynchronous continuations. Pass a logger instance through
+> async work instead.
+
+The previous context is restored on normal return and on exceptions, including
+nested scopes. Callback return values and exceptions are preserved. Fields from
+an inner context cannot remain attached to later logs after an exception is caught.
 
 ### Global context
 
@@ -576,7 +590,8 @@ woof has two sink channels, both can be active simultaneously.
 ### Legacy sink - `fn(Entry, String) -> Nil`
 
 Receives the resolved `Entry` (fields as strings) and the pre-formatted string.
-This is the original sink type - all built-in sinks use it.
+This is the original sink type, used by `default_sink`, `beam_logger_sink` and
+`silent_sink`. `beam_event_sink` uses typed events instead.
 
 ```gleam
 woof.set_sink(fn(_entry, formatted) {
@@ -617,7 +632,26 @@ woof.set_event_sink(fn(event: woof.LogEvent) {
 ```
 
 Both channels (legacy + event) fire independently on every emit. Remove with
-`clear_event_sink()`.
+`clear_event_sink()`. Use `set_sinks([])` to disable legacy output when the typed
+pipeline should be the only destination.
+
+### Typed sink fan-out (v1.10)
+
+`fanout_event_sink(sinks)` returns one `EventSink` that forwards the same event to
+every destination in list order:
+
+```gleam
+woof.set_sinks([])
+woof.set_event_sink(woof.fanout_event_sink([
+  woof.beam_event_sink,
+  audit_sink,
+]))
+```
+
+Each destination has its own error boundary: a failure does not stop later sinks.
+Dispatch is synchronous, so a slow destination delays the others. An empty list
+discards events. Wrap fan-out in `redact_event_sink` to mask every branch, or wrap
+individual branches when only some destinations need masking.
 
 ### Filtering an event sink (v1.6)
 
@@ -664,6 +698,10 @@ Important differences from level-tagged shortcuts (`info`, `error`, ...):
   context is *not* prepended.
 - **No level filter.** The current minimum level is not enforced. The caller
   has already decided to emit. To honour the filter, guard with `is_enabled`.
+- **Legacy formatting.** Registered `EventSink`s retain typed fields, but legacy
+  sinks format a stringified `Entry`, even for `Json` and `OtlpJson`. For native
+  JSON types when replaying, format the event inside a typed sink with
+  `format_event_json` or `format_event_otlp`.
 
 ### `beam_event_sink` - structured OTP logging
 
@@ -685,6 +723,8 @@ One-call configuration for common environments:
 woof.dev()   // Debug level, Text format, Auto colors, stdout
 woof.prod()  // Info level, Json format, no colors, beam_logger_sink
 ```
+
+Both presets replace legacy sinks and retain any registered typed event sink.
 
 ### Extending built-in sinks
 
@@ -709,12 +749,16 @@ compose them in matters.
 ### `redact_event_sink` - masking secrets
 
 Wraps an `EventSink` so fields whose key is in `keys` are replaced with
-`"[REDACTED]"` before reaching it, recursively through nested `woof.map`
-fields:
+`"[REDACTED]"` before reaching it. Matching is case-sensitive and exact by field
+key, recursively through maps and lists:
 
 ```gleam
 woof.set_event_sink(woof.redact_event_sink(["password", "token"], sink))
 ```
+
+The whole value of a matching key is replaced, including container values.
+Messages and substrings inside values are not scrubbed. Other destinations,
+including active legacy sinks, are outside this wrapper's protection.
 
 ### `sample_event_sink` and `consistent_sample_event_sink` - volume control
 
@@ -765,9 +809,11 @@ woof.set_event_sink(woof.batch_event_sink(100, 5000, fn(events) {
 
 There is no background timer: a partial batch only flushes when the next
 event arrives and a threshold is checked again. If traffic stops, the last
-partial batch stays buffered until the next event or process exit - call
-the returned sink periodically yourself if you need a hard latency bound
-during idle periods.
+partial batch can stay buffered indefinitely. There is no explicit flush API or
+automatic shutdown delivery. The wrapped sender is synchronous and owns any
+retry policy. On BEAM, batch and rate-limit state has process ownership and
+non-atomic updates; see [production_setup.md](production_setup.md#batching-and-shared-state)
+before sharing these wrappers across callers.
 
 ### `error_with` - structured error field
 
@@ -833,7 +879,8 @@ separate processes (which gleeunit/eunit does by default) are fully isolated.
 ## Lazy evaluation
 
 When building the message or fields is expensive, use the lazy variants.
-The thunk is only called if the level is currently enabled - zero allocation otherwise.
+The level-specific lazy functions defer the message only; their field arguments
+are evaluated by the caller:
 
 ```gleam
 woof.debug_lazy(fn() { "snapshot: " <> expensive_dump(state) }, [])
@@ -841,6 +888,20 @@ woof.debug_lazy(fn() { "snapshot: " <> expensive_dump(state) }, [])
 
 Available: `debug_lazy`, `info_lazy`, `notice_lazy`, `warning_lazy`, `error_lazy`,
 `critical_lazy`, `alert_lazy`, `emergency_lazy`.
+
+Use `log_lazy` on an instance to defer both the message and typed fields:
+
+```gleam
+let db = woof.new("database") |> woof.set_context([woof.str("pool", "primary")])
+
+db |> woof.log_lazy(woof.Debug, fn() {
+  #("Query details", [woof.str("query", expensive_query_description())])
+})
+```
+
+The builder returns `#(String, List(#(String, FieldValue)))`. It runs exactly once
+when the level is enabled and is skipped otherwise. Namespace, context ordering
+and trace precedence are the same as `log`. Builder exceptions propagate.
 
 Equivalently, guard with `is_enabled`:
 
@@ -1129,27 +1190,28 @@ behave identically on both targets.
 | `append_context` | `(Logger, List(#(String, FieldValue))) -> Logger` | Add fields to instance context |
 | `set_trace` | `(Logger, String, String) -> Logger` | Attach a trace and span to a logger (v1.8) |
 | `log` | `(Logger, Level, String, List(#(String, FieldValue))) -> Nil` | Log through a namespace |
+| `log_lazy` | `(Logger, Level, fn() -> #(String, List(#(String, FieldValue)))) -> Nil` | Defer message and fields (v1.10) |
 
 ### Field constructors
 
 | Function | Returns | Notes |
 | :--- | :--- | :--- |
-| `str(key, String)` | `#(String, FString)` | Preferred for strings |
-| `int(key, Int)` | `#(String, FInt)` | Preferred for integers |
-| `float(key, Float)` | `#(String, FFloat)` | Preferred for floats |
-| `bool(key, Bool)` | `#(String, FBool)` | JSON output: native `true`/`false` |
-| `list(key, List(FieldValue))` | `#(String, FList)` | Array, items typed (v1.7) |
-| `map(key, List(#(String, FieldValue)))` | `#(String, FMap)` | Nested object (v1.7) |
-| `null(key)` | `#(String, FNull)` | Explicit null (v1.7) |
-| `vstr(String)` | `FString` | Raw value for nested construction (v1.7) |
-| `vint(Int)` | `FInt` | Raw value (v1.7) |
-| `vfloat(Float)` | `FFloat` | Raw value (v1.7) |
-| `vbool(Bool)` | `FBool` | Raw value (v1.7) |
-| `vnull()` | `FNull` | Raw value (v1.7) |
-| `field(key, String)` | `#(String, FString)` | Alias for `str`, deprecated |
-| `int_field(key, Int)` | `#(String, FInt)` | Alias for `int`, deprecated |
-| `float_field(key, Float)` | `#(String, FFloat)` | Alias for `float`, deprecated |
-| `bool_field(key, Bool)` | `#(String, FBool)` | Alias for `bool`, deprecated |
+| `str(key, String)` | `#(String, FieldValue)` | Preferred for strings |
+| `int(key, Int)` | `#(String, FieldValue)` | Preferred for integers |
+| `float(key, Float)` | `#(String, FieldValue)` | Preferred for floats |
+| `bool(key, Bool)` | `#(String, FieldValue)` | JSON output: native `true`/`false` |
+| `list(key, List(FieldValue))` | `#(String, FieldValue)` | Array, items typed (v1.7) |
+| `map(key, List(#(String, FieldValue)))` | `#(String, FieldValue)` | Nested object (v1.7) |
+| `null(key)` | `#(String, FieldValue)` | Explicit null (v1.7) |
+| `vstr(String)` | `FieldValue` | Raw value for nested construction (v1.7) |
+| `vint(Int)` | `FieldValue` | Raw value (v1.7) |
+| `vfloat(Float)` | `FieldValue` | Raw value (v1.7) |
+| `vbool(Bool)` | `FieldValue` | Raw value (v1.7) |
+| `vnull()` | `FieldValue` | Raw value (v1.7) |
+| `field(key, String)` | `#(String, FieldValue)` | Alias for `str`, deprecated |
+| `int_field(key, Int)` | `#(String, FieldValue)` | Alias for `int`, deprecated |
+| `float_field(key, Float)` | `#(String, FieldValue)` | Alias for `float`, deprecated |
+| `bool_field(key, Bool)` | `#(String, FieldValue)` | Alias for `bool`, deprecated |
 
 ### Configuration
 
@@ -1172,6 +1234,7 @@ behave identically on both targets.
 | `set_sinks` | `(List(Sink)) -> Nil` | Register multiple legacy sinks |
 | `set_event_sink` | `(EventSink) -> Nil` | Register typed sink `fn(LogEvent) -> Nil` |
 | `clear_event_sink` | `() -> Nil` | Remove the typed event sink |
+| `fanout_event_sink` | `(List(EventSink)) -> EventSink` | Forward typed events in order, isolating failures (v1.10) |
 | `filter_event_sink` | `(fn(LogEvent) -> Bool, EventSink) -> EventSink` | Wrap an event sink with a predicate |
 | `redact_event_sink` | `(List(String), EventSink) -> EventSink` | Mask matching field keys (v1.9) |
 | `sample_event_sink` | `(Float, Level, EventSink) -> EventSink` | Random sampling below a level floor (v1.9) |
@@ -1191,7 +1254,7 @@ behave identically on both targets.
 
 | Function | Signature | Description |
 | :--- | :--- | :--- |
-| `with_context` | `(List(#(String, FieldValue)), fn() -> a) -> a` | Scoped fields |
+| `with_context` | `(List(#(String, FieldValue)), fn() -> a) -> a` | Scoped fields, restored even on exceptions |
 | `set_global_context` | `(List(#(String, FieldValue))) -> Nil` | App-wide fields |
 | `get_global_context` | `() -> List(#(String, FieldValue))` | Read current global ctx |
 | `append_global_context` | `(List(#(String, FieldValue))) -> Nil` | Add to global ctx |
@@ -1200,7 +1263,7 @@ behave identically on both targets.
 
 | Function | Signature | Description |
 | :--- | :--- | :--- |
-| `with_trace` | `(String, String, fn() -> a) -> a` | Scoped trace for every log in the body |
+| `with_trace` | `(String, String, fn() -> a) -> a` | Scoped trace, restored even on exceptions |
 | `current_trace` | `() -> Option(#(String, String))` | Read the scoped trace |
 | `set_resource` | `(List(#(String, FieldValue))) -> Nil` | Set OpenTelemetry resource attributes |
 | `get_resource` | `() -> List(#(String, FieldValue))` | Read resource attributes |

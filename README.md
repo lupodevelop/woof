@@ -1,16 +1,6 @@
-> ℹ️ **v1.9** adds production-hardening sink wrappers (`redact_event_sink`, `sample_event_sink`, `consistent_sample_event_sink`, `rate_limit_event_sink`, `batch_event_sink`), plus `error_with` and `log_at_most`.
->
-> ℹ️ **v1.8** adds trace correlation (`with_trace`, `set_trace`, `current_trace`), the `OtlpJson` format with `format_event_otlp`, and OpenTelemetry resource attributes (`set_resource`, `get_resource`).
->
-> ℹ️ **v1.7** adds `FList`/`FMap`/`FNull` variants, `list`/`map`/`null` constructors, `vstr`/`vint`/`vfloat`/`vbool`/`vnull` raw helpers, native typed JSON output, and public `format_event_*` helpers.
->
-> ℹ️ **v1.6** adds `child` loggers, `filter_event_sink`, public `emit(LogEvent)`, and public `level_to_int`. No breaking changes.
->
-> ℹ️ **v1.5** adds instanced logger context, `inspect`, `tap_time`, `level_from_string`, `set_level_from_env`, `get_level`, `append_context`, and soft deprecation warnings for legacy field helpers.
->
-> ℹ️ **v1.4** adds 4 new OTP levels (`Notice`, `Critical`, `Alert`, `Emergency`), `beam_event_sink`, multi-sink dispatch, and `dev()`/`prod()` presets.
->
-> ⚠️ **v1.3 breaking change:** fields changed from `List(#(String, String))` to `List(#(String, FieldValue))`. See [docs/migration_v1_3.md](docs/migration_v1_3.md).
+> **v1.10** adds typed sink fan-out and lazy instance logging, fixes JSON control
+> character escaping and nested redaction, and restores scoped context and traces
+> after exceptions. Existing APIs and defaults are preserved.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/lupodevelop/woof/main/assets/img/woof-logo.png" alt="woof logo" width="200" />
@@ -135,6 +125,16 @@ db |> woof.log(woof.Info, "Connected", [woof.str("host", "localhost")])
 // → namespace: "database", fields: component="db", host="localhost"
 ```
 
+Defer both the message and fields when diagnostics are expensive:
+
+```gleam
+db |> woof.log_lazy(woof.Debug, fn() {
+  #("Query details", [woof.str("query", expensive_query_description())])
+})
+```
+
+The builder runs once when the level is enabled, and is skipped otherwise.
+
 Build hierarchies with `child` (inherits parent context, dot-joined namespace):
 
 ```gleam
@@ -145,6 +145,19 @@ let router = woof.child(http, "router")   // namespace: "http.router"
 Ideal for JS async code where global context is unreliable.
 
 ## Selective sink routing
+
+Send typed events to several destinations, in order:
+
+```gleam
+woof.set_sinks([])
+woof.set_event_sink(woof.fanout_event_sink([
+  woof.beam_event_sink,
+  audit_sink,
+]))
+```
+
+Fan-out is synchronous. A failing sink does not block later destinations; a slow
+sink delays them. `set_sinks([])` disables the independent legacy output.
 
 Wrap a sink with a predicate to send only matching events somewhere:
 
@@ -161,14 +174,18 @@ Redact secrets, cap volume, and batch deliveries by composing sink
 wrappers - redact first, batch last:
 
 ```gleam
-woof.set_event_sink(
-  otlp_http_sink
-  |> woof.redact_event_sink(["password", "authorization"])
-  |> woof.rate_limit_event_sink(2000)
-  |> woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error)
-  |> woof.batch_event_sink(200, 5000),
-)
+let batched = woof.batch_event_sink(200, 5000, send_batch)
+let sampled = woof.consistent_sample_event_sink(0.1, "trace_id", woof.Error, batched)
+let limited = woof.rate_limit_event_sink(2000, sampled)
+woof.set_sinks([])
+woof.set_event_sink(woof.redact_event_sink(["password", "authorization"], limited))
 ```
+
+`send_batch` receives `List(woof.LogEvent)`. Build wrappers from the destination
+outward; events run through redaction, rate limiting, sampling, then batching.
+Redaction traverses maps and lists and protects only the wrapped destination.
+Partial batches flush on a later event when a threshold is met; there is no timer
+or automatic shutdown flush.
 
 `error_with` and `log_at_most` cover two more common cases: a structured
 error field, and capping a noisy log line without an `if` at every call
@@ -223,8 +240,13 @@ woof.with_trace(trace_id, span_id, fn() {
 })
 ```
 
+`with_trace` and `with_context` restore the previous scope even if the callback
+raises; the error still propagates. On JavaScript these scopes cover synchronous
+callbacks. Use logger instances for asynchronous work.
+
 Set OpenTelemetry resource attributes once at startup, then switch the format
-to `OtlpJson` for an OpenTelemetry-shaped object per line:
+to `OtlpJson` for an OpenTelemetry-shaped object per line. This is a per-event
+JSON representation; an adapter supplies export framing and transport:
 
 ```gleam
 woof.set_resource([
@@ -249,7 +271,7 @@ woof.configure(woof.Config(woof.Info, woof.OtlpJson, woof.Never))
 | [docs/semantic_conventions.md](docs/semantic_conventions.md) | Standard field names for queryable logs |
 | [docs/log_levels.md](docs/log_levels.md) | Choosing the right log level |
 | [docs/migration_v1_3.md](docs/migration_v1_3.md) | Upgrading from v1.2 - what changed and how to fix it |
-| [ROADMAP.md](ROADMAP.md) | Future releases v1.9 to v2.0 |
+| [ROADMAP.md](ROADMAP.md) | Release history and planned v2.0 cleanup |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [hexdocs.pm/woof](https://hexdocs.pm/woof/) | Generated module reference |
 
