@@ -190,6 +190,66 @@ pub fn json_escapes_special_chars_test() {
   |> should.be_true
 }
 
+pub fn json_escapes_all_control_characters_test() {
+  let controls =
+    "\u{0000}\u{0001}\u{0002}\u{0003}\u{0004}\u{0005}\u{0006}\u{0007}\u{0008}\u{0009}\u{000a}\u{000b}\u{000c}\u{000d}\u{000e}\u{000f}\u{0010}\u{0011}\u{0012}\u{0013}\u{0014}\u{0015}\u{0016}\u{0017}\u{0018}\u{0019}\u{001a}\u{001b}\u{001c}\u{001d}\u{001e}\u{001f}"
+  let escaped =
+    "\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f"
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: controls,
+      fields: [
+        woof.str(controls, controls),
+        woof.list("nested", [woof.FMap([woof.str(controls, controls)])]),
+      ],
+      timestamp: "2026-10-17T00:00:00.000Z",
+      namespace: Some(controls),
+    )
+  let pair = "\"" <> escaped <> "\":\"" <> escaped <> "\""
+  let json = woof.format_event_json(event)
+  json |> string.contains("\"msg\":\"" <> escaped <> "\"") |> should.be_true
+  json |> string.contains("\"ns\":\"" <> escaped <> "\"") |> should.be_true
+  json |> string.contains(pair) |> should.be_true
+  json |> string.contains("\"nested\":[{" <> pair <> "}]") |> should.be_true
+
+  let otlp = woof.format_event_otlp(event)
+  otlp |> string.contains("\"body\":\"" <> escaped <> "\"") |> should.be_true
+  otlp
+  |> string.contains("\"namespace\":\"" <> escaped <> "\"")
+  |> should.be_true
+  otlp |> string.contains(pair) |> should.be_true
+  otlp |> string.contains("\"nested\":[{" <> pair <> "}]") |> should.be_true
+
+  let entry =
+    woof.Entry(
+      level: woof.Info,
+      message: controls,
+      fields: [#(controls, controls)],
+      namespace: Some(controls),
+      timestamp: "2026-10-17T00:00:00.000Z",
+    )
+  let legacy = woof.format(entry, woof.Json)
+  legacy |> string.contains("\"msg\":\"" <> escaped <> "\"") |> should.be_true
+  legacy |> string.contains("\"ns\":\"" <> escaped <> "\"") |> should.be_true
+  legacy |> string.contains(pair) |> should.be_true
+}
+
+pub fn json_preserves_unicode_and_existing_escapes_test() {
+  let event =
+    woof.LogEvent(
+      level: woof.Info,
+      message: "Bologna 🇮🇹 e\u{0301} \"quoted\" \\path\n\r\t\u{0008}\u{000c}\u{001b}",
+      fields: [woof.str("città", "東京/é")],
+      timestamp: "2026-10-17T00:00:00.000Z",
+      namespace: None,
+    )
+  woof.format_event_json(event)
+  |> should.equal(
+    "{\"level\":\"info\",\"time\":\"2026-10-17T00:00:00.000Z\",\"msg\":\"Bologna 🇮🇹 e\u{0301} \\\"quoted\\\" \\\\path\\n\\r\\t\\b\\f\\u001b\",\"città\":\"東京/é\"}",
+  )
+}
+
 pub fn json_reserved_keys_test() {
   let entry =
     woof.Entry(
