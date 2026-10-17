@@ -1957,6 +1957,98 @@ pub fn child_does_not_mutate_parent_test() {
 // v1.6 -filter_event_sink
 // ---------------------------------------------------------------------------
 
+fn fanout_test_event() -> woof.LogEvent {
+  woof.LogEvent(
+    level: woof.Warning,
+    message: "request",
+    fields: [
+      woof.int("count", 42),
+      woof.list("users", [woof.FMap([woof.str("token", "secret")])]),
+    ],
+    timestamp: "2026-10-17T00:00:00.000Z",
+    namespace: Some("auth"),
+  )
+}
+
+pub fn fanout_event_sink_empty_list_test() {
+  woof.fanout_event_sink([])(fanout_test_event()) |> should.equal(Nil)
+}
+
+pub fn fanout_event_sink_preserves_event_test() {
+  let #(sink, get) = woof.test_sink()
+  let event = fanout_test_event()
+
+  woof.fanout_event_sink([sink])(event)
+
+  get() |> should.equal([event])
+}
+
+pub fn fanout_event_sink_calls_sinks_in_order_test() {
+  let #(capture, get) = woof.test_sink()
+  let event = fanout_test_event()
+  let first = fn(event) {
+    capture(
+      woof.LogEvent(..event, fields: [woof.str("sink", "first"), ..event.fields]),
+    )
+  }
+  let second = fn(event) {
+    capture(
+      woof.LogEvent(..event, fields: [
+        woof.str("sink", "second"),
+        ..event.fields
+      ]),
+    )
+  }
+
+  woof.fanout_event_sink([first, second])(event)
+
+  get()
+  |> should.equal([
+    woof.LogEvent(..event, fields: [woof.str("sink", "first"), ..event.fields]),
+    woof.LogEvent(..event, fields: [woof.str("sink", "second"), ..event.fields]),
+  ])
+}
+
+pub fn fanout_event_sink_continues_after_crashes_test() {
+  let #(sink, get) = woof.test_sink()
+  let event = fanout_test_event()
+  let crashing = fn(_) { panic as "intentional fanout crash" }
+
+  woof.fanout_event_sink([crashing, sink, crashing, sink])(event)
+
+  get() |> should.equal([event, event])
+}
+
+pub fn fanout_event_sink_outer_redaction_applies_to_all_sinks_test() {
+  let #(sink, get) = woof.test_sink()
+  let event = fanout_test_event()
+  let fanout = woof.fanout_event_sink([sink, sink])
+
+  woof.redact_event_sink(["token"], fanout)(event)
+
+  let expected =
+    woof.LogEvent(..event, fields: [
+      woof.int("count", 42),
+      woof.list("users", [woof.FMap([woof.str("token", "[REDACTED]")])]),
+    ])
+  get() |> should.equal([expected, expected])
+}
+
+pub fn fanout_event_sink_branch_redaction_is_isolated_test() {
+  let #(sink, get) = woof.test_sink()
+  let event = fanout_test_event()
+  let redacted = woof.redact_event_sink(["token"], sink)
+
+  woof.fanout_event_sink([redacted, sink])(event)
+
+  let expected =
+    woof.LogEvent(..event, fields: [
+      woof.int("count", 42),
+      woof.list("users", [woof.FMap([woof.str("token", "[REDACTED]")])]),
+    ])
+  get() |> should.equal([expected, event])
+}
+
 pub fn filter_event_sink_passes_when_predicate_true_test() {
   reset()
   let #(sink, get) = woof.test_sink()
