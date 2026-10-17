@@ -29,8 +29,6 @@ No public APIs were removed or renamed. Existing signatures and defaults remain
 unchanged. Output changes are limited to previously unescaped control characters
 and previously unmasked secrets inside lists.
 
-Validation: 233 tests pass on BEAM and 228 on JavaScript.
-
 ## [1.9.0] - 2026-07-30
 
 ### Added
