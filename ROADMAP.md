@@ -1,11 +1,10 @@
-# woof Roadmap (post v1.6)
+# woof Roadmap
 
-The path from v1.6 to v2.0. Four releases that take woof from a "data-driven
-logging frontend" to the standard logging library for Gleam.
+Released features, the v1.10 release scope, and planned v2.0 cleanup.
 
-**Current version:** v1.9.0
+**Current version:** v1.10.0
 
-## Upcoming releases at a glance
+## Releases at a glance
 
 | Version | Theme | Key additions | Status |
 | :------ | :---- | :------------ | :----- |
@@ -13,6 +12,7 @@ logging frontend" to the standard logging library for Gleam.
 | v1.7.1 | Robustness patch | NaN/Inf JSON safety, ANSI strip in Text, sink crash isolation | shipped |
 | v1.8 | OpenTelemetry | Trace correlation, OTLP output, semantic conventions | shipped |
 | v1.9 | Production hardening | Sampling, rate limiting, redaction, batching, benchmarks | shipped |
+| v1.10 | Compatible improvements | Typed fan-out, lazy instance logging, JSON/redaction fixes, exception-safe scopes | release preparation |
 | v2.0 | Cleanup | Remove `Entry`, `Format`, legacy sink, deprecated field helpers | planned |
 
 ## v1.7: Complete Data Model and Native JSON
@@ -81,6 +81,23 @@ moved to "Out of scope" pending a concrete use case (see below).
   * `docs/sink_composition.md`
   * `docs/benchmarks.md`
 
+## v1.10: Compatible Improvements
+
+* `fanout_event_sink(List(EventSink)) -> EventSink`: synchronous typed fan-out
+  with ordered delivery and failure isolation per destination.
+* `log_lazy(Logger, Level, fn() -> #(String, List(#(String, FieldValue)))) -> Nil`:
+  defer message and field construction, preserving logger context and trace.
+* Escape all JSON control characters and redact matching keys through nested
+  lists and maps.
+* Restore scoped context and traces when callbacks raise, without swallowing
+  exceptions.
+* Correct production examples and document batching, redaction and async scope
+  boundaries. Existing public APIs, signatures and defaults are preserved.
+
+Follow-ups remain separate: atomic shared state and ETS ownership for BEAM sink
+wrappers, explicit batch flushing, and typed JSON parity for `emit` on legacy sinks.
+The 1.10 changes do not resolve those limitations.
+
 ## v2.0: The Cleanup
 
 By v1.9 every feature already exists on the typed `LogEvent` path. v2.0
@@ -107,7 +124,7 @@ removes the duplicated legacy paths.
 * All eight log shortcut functions (`debug`, `info`, ..., `emergency`)
 * All context APIs (`with_context`, `set_global_context`, instanced `Logger`)
 * All pipeline helpers (`tap_*`, `log_error`, `time`, `inspect`, `tap_time`)
-* All v1.7 to v1.9 additions
+* Typed event helpers added in v1.7 through v1.10, subject to the sink renames above
 
 **Architectural follow-ups (carried over from audit):**
 
@@ -145,7 +162,7 @@ Considered and intentionally excluded:
   for trace-coherent sampling, which is the strong, demanded use case.
   Multi-sink fan-out by hashed key is niche, has weaker semantics under
   resize (plain mod-N is not consistent hashing), and pins API surface
-  in the last 1.x release. Reconsider as a v1.9.x patch or a separate
+  without demonstrated demand. Reconsider as a separate
   plugin package once there is concrete demand.
 
 ## Release criteria
@@ -156,7 +173,7 @@ Every release ships when:
 2. Tests pass on both BEAM and JavaScript targets
 3. Every new public API has TDD tests
 4. README, CHANGELOG, and guide are updated
-5. `gleam publish --dry-run` succeeds
+5. `gleam docs build` and `gleam export hex-tarball` succeed locally
 
 ## Related documents
 

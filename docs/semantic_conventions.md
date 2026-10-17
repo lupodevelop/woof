@@ -61,8 +61,9 @@ them with `set_context` / `with_context`.
 | `user.id` | string or int | `"u_8812"` |
 | `user.email` | string | `"a@example.com"` |
 
-Treat `user.email` as personal data. Redaction helpers arrive in v1.9; until
-then, avoid logging it where it is not needed.
+Treat `user.email` as personal data and log it only when needed. Use
+`redact_event_sink(["user.email"], sink)` to mask that exact field key, including
+inside nested maps and lists. Apply redaction to every destination that needs it.
 
 ### Database
 
