@@ -293,6 +293,13 @@ pub fn clear_event_sink() -> Nil {
   write_state(State(..state, event_sink: None))
 }
 
+/// Forward events synchronously to each sink in order, isolating failures.
+pub fn fanout_event_sink(sinks: List(EventSink)) -> EventSink {
+  fn(event) {
+    list.each(sinks, fn(sink) { ffi_safe_call(fn() { sink(event) }) })
+  }
+}
+
 /// Wrap an `EventSink` with a predicate.
 ///
 /// Events for which `predicate(event)` is `True` are forwarded to the wrapped
