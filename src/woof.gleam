@@ -1990,14 +1990,24 @@ fn json_pair_typed(key: String, value: FieldValue) -> String {
 
 fn json_escape(s: String) -> String {
   s
-  |> string.replace("\\", "\\\\")
-  |> string.replace("\"", "\\\"")
-  |> string.replace("\n", "\\n")
-  |> string.replace("\u{001B}", "\\u001b")
-  |> string.replace("\r", "\\r")
-  |> string.replace("\t", "\\t")
-  |> string.replace("\u{0008}", "\\b")
-  |> string.replace("\u{000C}", "\\f")
+  |> string.to_utf_codepoints
+  |> list.map(fn(codepoint) {
+    case string.utf_codepoint_to_int(codepoint) {
+      34 -> "\\\""
+      92 -> "\\\\"
+      8 -> "\\b"
+      9 -> "\\t"
+      10 -> "\\n"
+      12 -> "\\f"
+      13 -> "\\r"
+      code if code < 32 -> {
+        let assert Ok(hex) = gleam_int.to_base_string(code, 16)
+        "\\u" <> { hex |> string.lowercase |> string.pad_start(4, "0") }
+      }
+      _ -> string.from_utf_codepoints([codepoint])
+    }
+  })
+  |> string.concat
 }
 
 fn level_tag(level: Level) -> String {
